@@ -1,0 +1,110 @@
+Upgrade HS Studio Phase 1: Professional Subtitle System
+
+IMPORTANT:
+Do not redesign the UI.
+Do not remove any existing functionality.
+Keep the current 3-panel layout and premium dark theme.
+
+PRIMARY GOAL:
+Replace the current mock subtitle system with a real subtitle workflow.
+
+FEATURES
+
+1. Real Speech-to-Text Subtitle Generation
+
+* Remove all hardcoded subtitle text.
+* Generate subtitles from the uploaded video's speech.
+* Support Hindi and English.
+* Create subtitle objects:
+
+{
+id: string,
+text: string,
+start: number,
+end: number
+}
+
+* Generate accurate timestamps.
+* Handle long videos.
+* Handle videos with no speech.
+
+2. Subtitle Synchronization
+
+* Synchronize subtitles with video playback.
+* Display the correct subtitle based on current video time.
+* Subtitles must automatically change as the video progresses.
+
+3. Professional Subtitle Overlay
+
+* Display subtitles directly on top of the video.
+* Use modern short-form content styling.
+* Large readable text.
+* Multi-line support.
+* Mobile-friendly layout.
+* Smooth transitions.
+
+4. Subtitle Editor
+
+* Edit subtitle text.
+* Delete subtitle segments.
+* Add new subtitle segments.
+* Modify start time.
+* Modify end time.
+* Live preview updates immediately.
+
+5. Subtitle Timeline Track
+
+* Create a dedicated subtitle track.
+* Show subtitle blocks on the timeline.
+* Clicking a subtitle block seeks the video.
+* Show subtitle duration visually.
+
+6. Subtitle Generation Progress
+
+* Show loading state.
+* Show percentage progress if available.
+* Prevent duplicate generation requests.
+
+7. Video Metadata
+   After upload display:
+
+* File name
+* Duration
+* Resolution
+* File size
+
+8. Project Persistence
+   Save subtitles in project state.
+   Allow:
+
+* Save Project
+* Load Project
+* Auto Save
+
+9. Performance
+
+* Optimize React rendering.
+* Handle large subtitle lists efficiently.
+* Prevent unnecessary re-renders.
+
+10. Code Structure
+    Create:
+
+src/components/subtitles/
+src/hooks/
+src/lib/
+src/types/
+
+Move subtitle logic out of App.tsx.
+
+11. Quality Requirements
+
+* No mock data.
+* No placeholder subtitles.
+* No console errors.
+* Production-ready code.
+* Fully responsive.
+* Clean architecture.
+
+Before implementing features:
+Fix all existing errors and ensure the application runs successfully.
