@@ -52,7 +52,7 @@ function useActiveSession() {
 
 // --- Components ---
 
-function LeftPanel({ sessionId, videoUrl, setVideoUrl }: { sessionId: number | null, videoUrl: string | null, setVideoUrl: (url: string) => void }) {
+function LeftPanel({ sessionId, videoUrl, setVideoUrl, credits }: { sessionId: number | null, videoUrl: string | null, setVideoUrl: (url: string) => void, credits: number }) {
   const { data: session, isLoading } = useGetSession(sessionId || 0, {
     query: { enabled: !!sessionId, queryKey: getGetSessionQueryKey(sessionId || 0) },
   });
@@ -76,10 +76,9 @@ function LeftPanel({ sessionId, videoUrl, setVideoUrl }: { sessionId: number | n
     }
   };
 
-  const credits = session?.credits ?? 100;
   let progressColor = "bg-primary";
-  if (credits <= 10) progressColor = "bg-destructive";
-  else if (credits <= 50) progressColor = "bg-yellow-500";
+  if (credits <= 5) progressColor = "bg-destructive";
+  else if (credits <= 20) progressColor = "bg-yellow-500";
 
   return (
     <div className="w-[280px] h-full flex flex-col border-r border-border bg-card p-6 gap-6">
@@ -130,9 +129,9 @@ function LeftPanel({ sessionId, videoUrl, setVideoUrl }: { sessionId: number | n
             <div className="space-y-1.5">
               <div className="flex justify-between text-[10px] text-muted-foreground uppercase font-medium">
                 <span>AI Credits</span>
-                <span>{credits}/100</span>
+                <span>{credits}/50</span>
               </div>
-              <Progress value={credits} className={cn("h-1.5", progressColor)} />
+              <Progress value={(credits / 50) * 100} className={cn("h-1.5", progressColor)} />
             </div>
           </div>
         ) : null}
@@ -312,7 +311,7 @@ function CenterPanel({ sessionId, videoUrl, currentTimestamp, setCurrentTimestam
   );
 }
 
-function RightPanel({ sessionId, currentTimestamp }: { sessionId: number | null, currentTimestamp: number }) {
+function RightPanel({ sessionId, currentTimestamp, credits, deductCredits }: { sessionId: number | null, currentTimestamp: number, credits: number, deductCredits: (amount: number) => void }) {
   const { data: messages, isLoading: messagesLoading } = useListChatMessages(sessionId || 0, {
     query: { enabled: !!sessionId, queryKey: getListChatMessagesQueryKey(sessionId || 0) },
   });
@@ -329,13 +328,16 @@ function RightPanel({ sessionId, currentTimestamp }: { sessionId: number | null,
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!content.trim() || !sessionId || sendMessage.isPending) return;
+    if (!content.trim() || !sessionId || sendMessage.isPending || credits <= 0) return;
 
     sendMessage.mutate(
       { id: sessionId, data: { content, currentTimestamp } },
       {
-        onSuccess: () => {
+        onSuccess: (response) => {
           setContent("");
+          if (response.command) {
+            deductCredits(CREDIT_COST);
+          }
           queryClient.invalidateQueries({ queryKey: getListChatMessagesQueryKey(sessionId) });
           queryClient.invalidateQueries({ queryKey: getListSessionEventsQueryKey(sessionId) });
           queryClient.invalidateQueries({ queryKey: getGetSessionQueryKey(sessionId) });
@@ -405,9 +407,9 @@ function RightPanel({ sessionId, currentTimestamp }: { sessionId: number | null,
           <Input
             value={content}
             onChange={e => setContent(e.target.value)}
-            placeholder="Ask AI to edit..."
+            placeholder={credits <= 0 ? "No credits remaining" : "Ask AI to edit..."}
             className="pr-10 bg-background border-border focus-visible:ring-primary/50 text-sm"
-            disabled={sendMessage.isPending || !sessionId}
+            disabled={sendMessage.isPending || !sessionId || credits <= 0}
             data-testid="input-chat-message"
           />
           <Button 
@@ -415,14 +417,17 @@ function RightPanel({ sessionId, currentTimestamp }: { sessionId: number | null,
             size="icon" 
             variant="ghost" 
             className="absolute right-1 top-1 w-8 h-8 text-primary hover:text-primary hover:bg-primary/10"
-            disabled={!content.trim() || sendMessage.isPending || !sessionId}
+            disabled={!content.trim() || sendMessage.isPending || !sessionId || credits <= 0}
             data-testid="button-send-chat"
           >
             <Play className="w-4 h-4 fill-current" />
           </Button>
         </form>
         <div className="mt-2 text-center">
-          <p className="text-[10px] text-muted-foreground">Try: cut, subtitle, zoom</p>
+          {credits <= 0
+            ? <p className="text-[10px] text-destructive font-medium">Out of credits</p>
+            : <p className="text-[10px] text-muted-foreground">Try: cut, subtitle, zoom · costs {CREDIT_COST} CR</p>
+          }
         </div>
       </div>
     </div>
@@ -430,6 +435,9 @@ function RightPanel({ sessionId, currentTimestamp }: { sessionId: number | null,
 }
 
 // --- Main App Inner (must be inside QueryClientProvider) ---
+
+const CREDIT_COST = 5;
+const STARTING_CREDITS = 50;
 
 function AppInner() {
   useEffect(() => {
@@ -439,12 +447,17 @@ function AppInner() {
   const sessionId = useActiveSession();
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [currentTimestamp, setCurrentTimestamp] = useState(0);
+  const [credits, setCredits] = useState(STARTING_CREDITS);
+
+  const deductCredits = (amount: number) => {
+    setCredits(prev => Math.max(0, prev - amount));
+  };
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground selection:bg-primary/30">
-      <LeftPanel sessionId={sessionId} videoUrl={videoUrl} setVideoUrl={setVideoUrl} />
+      <LeftPanel sessionId={sessionId} videoUrl={videoUrl} setVideoUrl={setVideoUrl} credits={credits} />
       <CenterPanel sessionId={sessionId} videoUrl={videoUrl} currentTimestamp={currentTimestamp} setCurrentTimestamp={setCurrentTimestamp} />
-      <RightPanel sessionId={sessionId} currentTimestamp={currentTimestamp} />
+      <RightPanel sessionId={sessionId} currentTimestamp={currentTimestamp} credits={credits} deductCredits={deductCredits} />
     </div>
   );
 }
