@@ -1,466 +1,688 @@
-import { useState, useRef, useEffect } from "react";
-import { UploadCloud, Video, Play, Pause, X } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  UploadCloud, Video, Play, Pause, X, Download,
+  Scissors, Type, ZoomIn, Send, CheckCircle, Sparkles,
+  ChevronDown,
+} from "lucide-react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import {
   useListSessions,
   useCreateSession,
   useGetSession,
-  useListSessionEvents,
-  useDeleteTimelineEvent,
-  useListChatMessages,
-  useSendChatMessage,
   getGetSessionQueryKey,
-  getListSessionEventsQueryKey,
-  getListChatMessagesQueryKey,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import {
+  type ChatMessage,
+  type TimelineEvent,
+  type Subtitle,
+  type CommandType,
+  processCommand,
+  COMMAND_COLORS,
+} from "@/lib/commands";
 
 const queryClient = new QueryClient();
 
-// --- Custom Hooks ---
+const CREDIT_COST = 5;
+const STARTING_CREDITS = 50;
+const EXPORT_RESOLUTIONS = ['720p', '1080p', '4K'] as const;
+type Resolution = typeof EXPORT_RESOLUTIONS[number];
+
+// ─── Shared state types ────────────────────────────────────────────────────────
+
+interface AppState {
+  credits: number;
+  videoUrl: string | null;
+  videoName: string | null;
+  currentTimestamp: number;
+  duration: number;
+  messages: ChatMessage[];
+  timelineEvents: TimelineEvent[];
+  subtitles: Subtitle[];
+}
+
+// ─── Session hook ──────────────────────────────────────────────────────────────
 
 function useActiveSession() {
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
-  
-  const { data: sessions, isLoading: sessionsLoading } = useListSessions();
+  const { data: sessions, isLoading } = useListSessions();
   const createSession = useCreateSession();
 
   useEffect(() => {
-    if (sessionsLoading) return;
-
+    if (isLoading) return;
     if (sessions && sessions.length > 0) {
-      if (!activeSessionId) {
-        setActiveSessionId(sessions[0].id);
-      }
+      if (!activeSessionId) setActiveSessionId(sessions[0].id);
     } else {
       createSession.mutate(
         { data: { name: "My Project" } },
-        {
-          onSuccess: (session) => setActiveSessionId(session.id),
-        }
+        { onSuccess: (s) => setActiveSessionId(s.id) }
       );
     }
-  }, [sessions, sessionsLoading, activeSessionId, createSession]);
+  }, [sessions, isLoading, activeSessionId, createSession]);
 
   return activeSessionId;
 }
 
-// --- Components ---
+// ─── Toast ─────────────────────────────────────────────────────────────────────
 
-function LeftPanel({ sessionId, videoUrl, setVideoUrl, credits }: { sessionId: number | null, videoUrl: string | null, setVideoUrl: (url: string) => void, credits: number }) {
+function Toast({ message, onDone }: { message: string; onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 3500);
+    return () => clearTimeout(t);
+  }, [onDone]);
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-card border border-border shadow-2xl rounded-xl px-5 py-3 text-sm font-medium animate-in fade-in slide-in-from-bottom-4 duration-300">
+      <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+      <span className="text-foreground">{message}</span>
+    </div>
+  );
+}
+
+// ─── Left Panel ────────────────────────────────────────────────────────────────
+
+function LeftPanel({
+  sessionId,
+  videoUrl,
+  videoName,
+  credits,
+  onFileSelect,
+  onExport,
+  isExporting,
+}: {
+  sessionId: number | null;
+  videoUrl: string | null;
+  videoName: string | null;
+  credits: number;
+  onFileSelect: (file: File) => void;
+  onExport: (res: Resolution) => void;
+  isExporting: boolean;
+}) {
   const { data: session, isLoading } = useGetSession(sessionId || 0, {
     query: { enabled: !!sessionId, queryKey: getGetSessionQueryKey(sessionId || 0) },
   });
+  const [resolution, setResolution] = useState<Resolution>('1080p');
+  const [showResDropdown, setShowResDropdown] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith("video/")) {
-      setVideoUrl(URL.createObjectURL(file));
-    }
+    if (file?.type.startsWith("video/")) onFileSelect(file);
   };
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && file.type.startsWith("video/")) {
-      setVideoUrl(URL.createObjectURL(file));
-    }
+    if (file?.type.startsWith("video/")) onFileSelect(file);
   };
 
-  let progressColor = "bg-primary";
-  if (credits <= 5) progressColor = "bg-destructive";
-  else if (credits <= 20) progressColor = "bg-yellow-500";
+  const pct = (credits / STARTING_CREDITS) * 100;
+  const barColor = credits <= 5 ? "bg-red-500" : credits <= 20 ? "bg-yellow-500" : "bg-primary";
 
   return (
-    <div className="w-[280px] h-full flex flex-col border-r border-border bg-card p-6 gap-6">
-      <div className="flex items-center gap-2">
-        <Video className="w-5 h-5 text-primary" />
-        <h1 className="font-bold text-lg tracking-tight">HS Studio</h1>
-      </div>
-
-      <div className="space-y-2">
-        <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Upload Video</h2>
-        <div 
-          className={cn(
-            "border-2 border-dashed border-border rounded-lg p-6 flex flex-col items-center justify-center text-center gap-3 transition-colors",
-            "hover:bg-muted/50 cursor-pointer",
-            videoUrl ? "border-primary bg-primary/5" : ""
-          )}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onClick={() => document.getElementById('video-upload')?.click()}
-          data-testid="upload-zone"
-        >
-          <input 
-            id="video-upload"
-            type="file" 
-            accept="video/*" 
-            className="hidden" 
-            onChange={handleFileSelect}
-            data-testid="input-video-upload"
-          />
-          <UploadCloud className="w-8 h-8 text-muted-foreground" />
-          <div className="text-sm">
-            <p className="font-medium text-foreground">Drag & drop or click</p>
-            <p className="text-muted-foreground text-xs mt-1">MP4, WebM, MOV</p>
-          </div>
-          {videoUrl && <p className="text-xs text-primary font-medium mt-2">Video loaded</p>}
+    <aside className="w-[260px] shrink-0 h-full flex flex-col border-r border-border bg-card/80 backdrop-blur-sm">
+      {/* Logo */}
+      <div className="px-5 py-4 border-b border-border flex items-center gap-2.5">
+        <div className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center">
+          <Video className="w-4 h-4 text-primary" />
         </div>
+        <span className="font-bold text-base tracking-tight">HS Studio</span>
       </div>
 
-      <div className="mt-auto space-y-4">
-        {isLoading ? (
-          <Skeleton className="h-20 w-full" />
-        ) : session ? (
-          <div className="space-y-3 bg-muted/40 p-4 rounded-lg">
-            <div className="flex justify-between items-center">
-              <span className="text-sm font-medium text-muted-foreground truncate">{session.name}</span>
-              <span className="text-xs font-mono bg-background px-2 py-1 rounded-md text-foreground">{credits} CR</span>
+      <div className="flex-1 flex flex-col gap-5 p-4 overflow-y-auto">
+        {/* Upload */}
+        <section className="space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Upload Video</p>
+          <div
+            className={cn(
+              "relative border-2 border-dashed rounded-xl p-5 flex flex-col items-center gap-3 cursor-pointer transition-all duration-200 text-center group",
+              videoUrl
+                ? "border-primary/50 bg-primary/5"
+                : "border-border hover:border-primary/40 hover:bg-muted/30"
+            )}
+            onDrop={handleDrop}
+            onDragOver={(e) => e.preventDefault()}
+            onClick={() => fileInputRef.current?.click()}
+            data-testid="upload-zone"
+          >
+            <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={handleFileChange} data-testid="input-video-upload" />
+            <div className={cn("w-10 h-10 rounded-full flex items-center justify-center transition-colors", videoUrl ? "bg-primary/20" : "bg-muted/50 group-hover:bg-muted")}>
+              <UploadCloud className={cn("w-5 h-5 transition-colors", videoUrl ? "text-primary" : "text-muted-foreground")} />
             </div>
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-[10px] text-muted-foreground uppercase font-medium">
+            {videoUrl ? (
+              <>
+                <p className="text-xs font-semibold text-primary">Video loaded</p>
+                <p className="text-[10px] text-muted-foreground truncate w-full px-1">{videoName}</p>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-semibold text-foreground">Drag & drop or click</p>
+                <p className="text-[10px] text-muted-foreground">MP4, WebM, MOV</p>
+              </>
+            )}
+          </div>
+        </section>
+
+        {/* Export */}
+        <section className="space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Export</p>
+          <div className="space-y-2">
+            <div className="relative">
+              <button
+                className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-background border border-border text-xs font-medium hover:border-primary/40 transition-colors"
+                onClick={() => setShowResDropdown(v => !v)}
+              >
+                <span className="text-foreground">{resolution}</span>
+                <ChevronDown className={cn("w-3.5 h-3.5 text-muted-foreground transition-transform", showResDropdown && "rotate-180")} />
+              </button>
+              {showResDropdown && (
+                <div className="absolute top-full mt-1 left-0 right-0 bg-card border border-border rounded-lg shadow-xl z-20 overflow-hidden">
+                  {EXPORT_RESOLUTIONS.map(r => (
+                    <button
+                      key={r}
+                      className={cn("w-full px-3 py-2 text-xs text-left hover:bg-muted/50 transition-colors", r === resolution && "text-primary font-semibold bg-primary/5")}
+                      onClick={() => { setResolution(r); setShowResDropdown(false); }}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Button
+              className="w-full gap-2 text-xs font-semibold h-9"
+              disabled={!videoUrl || isExporting}
+              onClick={() => onExport(resolution)}
+            >
+              {isExporting ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
+                  Exporting…
+                </>
+              ) : (
+                <>
+                  <Download className="w-3.5 h-3.5" />
+                  Export {resolution}
+                </>
+              )}
+            </Button>
+          </div>
+        </section>
+      </div>
+
+      {/* Session / Credits */}
+      <div className="p-4 border-t border-border">
+        {isLoading ? (
+          <Skeleton className="h-16 w-full rounded-xl" />
+        ) : session ? (
+          <div className="space-y-3 bg-muted/30 rounded-xl p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground truncate">{session.name}</span>
+              <span className={cn("text-[11px] font-mono font-bold px-2 py-0.5 rounded-md", credits <= 5 ? "bg-red-500/10 text-red-400" : credits <= 20 ? "bg-yellow-500/10 text-yellow-400" : "bg-primary/10 text-primary")}>
+                {credits} CR
+              </span>
+            </div>
+            <div className="space-y-1">
+              <div className="flex justify-between text-[10px] text-muted-foreground">
                 <span>AI Credits</span>
-                <span>{credits}/50</span>
+                <span>{credits}/{STARTING_CREDITS}</span>
               </div>
-              <Progress value={(credits / 50) * 100} className={cn("h-1.5", progressColor)} />
+              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className={cn("h-full rounded-full transition-all duration-500", barColor)} style={{ width: `${pct}%` }} />
+              </div>
             </div>
           </div>
         ) : null}
       </div>
+    </aside>
+  );
+}
+
+// ─── Subtitle Overlay ──────────────────────────────────────────────────────────
+
+function SubtitleOverlay({ subtitles }: { subtitles: Subtitle[] }) {
+  const [idx, setIdx] = useState(0);
+
+  useEffect(() => {
+    if (subtitles.length === 0) return;
+    setIdx(0);
+    const t = setInterval(() => setIdx(i => (i + 1) % subtitles.length), 2500);
+    return () => clearInterval(t);
+  }, [subtitles]);
+
+  if (subtitles.length === 0) return null;
+
+  return (
+    <div className="absolute bottom-6 left-0 right-0 flex justify-center pointer-events-none px-4">
+      <div className="bg-black/70 backdrop-blur-sm text-white text-lg font-bold px-6 py-2.5 rounded-2xl tracking-wide shadow-[0_4px_24px_rgba(0,0,0,0.6)] border border-white/10 max-w-[80%] text-center leading-tight">
+        {subtitles[idx].text}
+      </div>
     </div>
   );
 }
 
-function CenterPanel({ sessionId, videoUrl, currentTimestamp, setCurrentTimestamp }: { sessionId: number | null, videoUrl: string | null, currentTimestamp: number, setCurrentTimestamp: (time: number) => void }) {
+// ─── Center Panel ──────────────────────────────────────────────────────────────
+
+function CenterPanel({
+  videoUrl,
+  currentTimestamp,
+  duration,
+  timelineEvents,
+  subtitles,
+  onTimeUpdate,
+  onDurationLoad,
+  onSeek,
+}: {
+  videoUrl: string | null;
+  currentTimestamp: number;
+  duration: number;
+  timelineEvents: TimelineEvent[];
+  subtitles: Subtitle[];
+  onTimeUpdate: (t: number) => void;
+  onDurationLoad: (d: number) => void;
+  onSeek: (t: number) => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [duration, setDuration] = useState(0);
 
-  const { data: events, isLoading: eventsLoading } = useListSessionEvents(sessionId || 0, {
-    query: { enabled: !!sessionId, queryKey: getListSessionEventsQueryKey(sessionId || 0) },
-  });
-  const deleteEvent = useDeleteTimelineEvent();
-  const queryClient = useQueryClient();
+  const formatTime = (t: number) => {
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
 
   const togglePlay = () => {
-    if (videoRef.current) {
-      if (isPlaying) videoRef.current.pause();
-      else videoRef.current.play();
-      setIsPlaying(!isPlaying);
-    }
+    if (!videoRef.current) return;
+    if (isPlaying) videoRef.current.pause();
+    else videoRef.current.play();
+    setIsPlaying(!isPlaying);
   };
 
-  const handleTimeUpdate = () => {
-    if (videoRef.current) {
-      setCurrentTimestamp(videoRef.current.currentTime);
-    }
+  const handleSeekInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const t = parseFloat(e.target.value);
+    if (videoRef.current) videoRef.current.currentTime = t;
+    onSeek(t);
   };
 
-  const handleLoadedMetadata = () => {
-    if (videoRef.current) {
-      setDuration(videoRef.current.duration);
-    }
+  const seekTo = (t: number) => {
+    if (videoRef.current) videoRef.current.currentTime = t;
+    onSeek(t);
   };
 
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const time = parseFloat(e.target.value);
-    setCurrentTimestamp(time);
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
-    }
+  const eventIcons: Record<CommandType, React.ReactNode> = {
+    cut: <Scissors className="w-3 h-3" />,
+    subtitle: <Type className="w-3 h-3" />,
+    zoom: <ZoomIn className="w-3 h-3" />,
   };
 
-  const formatTime = (time: number) => {
-    const mins = Math.floor(time / 60);
-    const secs = Math.floor(time % 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  };
-
-  const seekTo = (time: number) => {
-    setCurrentTimestamp(time);
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
-    }
-  };
-
-  const handleDeleteEvent = (eventId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (sessionId) {
-      deleteEvent.mutate(
-        { id: sessionId, eventId },
-        {
-          onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: getListSessionEventsQueryKey(sessionId) });
-          }
-        }
-      );
-    }
+  const eventBadgeColors: Record<CommandType, string> = {
+    cut: "bg-red-500/15 text-red-400 border-red-500/20",
+    subtitle: "bg-cyan-500/15 text-cyan-400 border-cyan-500/20",
+    zoom: "bg-violet-500/15 text-violet-400 border-violet-500/20",
   };
 
   return (
-    <div className="flex-1 h-full flex flex-col bg-background">
-      <div className="flex-1 p-6 flex flex-col justify-center items-center relative overflow-hidden">
+    <main className="flex-1 h-full flex flex-col bg-background min-w-0">
+      {/* Video area */}
+      <div className="flex-1 flex items-center justify-center relative overflow-hidden bg-black/30">
         {videoUrl ? (
-          <video
-            ref={videoRef}
-            src={videoUrl}
-            className="max-w-full max-h-full rounded-md shadow-2xl object-contain bg-black"
-            onTimeUpdate={handleTimeUpdate}
-            onLoadedMetadata={handleLoadedMetadata}
-            onEnded={() => setIsPlaying(false)}
-            onClick={togglePlay}
-          />
+          <>
+            <video
+              ref={videoRef}
+              src={videoUrl}
+              className="max-w-full max-h-full object-contain rounded-md shadow-2xl"
+              onTimeUpdate={() => { if (videoRef.current) onTimeUpdate(videoRef.current.currentTime); }}
+              onLoadedMetadata={() => { if (videoRef.current) onDurationLoad(videoRef.current.duration); }}
+              onEnded={() => setIsPlaying(false)}
+              onClick={togglePlay}
+              data-testid="video-player"
+            />
+            <SubtitleOverlay subtitles={subtitles} />
+          </>
         ) : (
-          <div className="flex flex-col items-center text-muted-foreground gap-4">
-            <div className="w-24 h-24 rounded-full bg-muted/20 flex items-center justify-center">
-              <Video className="w-10 h-10 opacity-50" />
+          <div className="flex flex-col items-center gap-4 text-muted-foreground select-none">
+            <div className="w-20 h-20 rounded-2xl bg-muted/20 flex items-center justify-center border border-border/50">
+              <Video className="w-9 h-9 opacity-40" />
             </div>
-            <p className="text-sm font-medium tracking-wide">Drop a video to begin editing</p>
+            <p className="text-sm font-medium">Drop a video to begin editing</p>
           </div>
         )}
       </div>
 
-      <div className="h-48 border-t border-border bg-card flex flex-col px-6 py-4">
-        {/* Controls */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={togglePlay} disabled={!videoUrl} data-testid="button-play-pause">
-              {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
-            </Button>
-            <div className="text-xs font-mono text-muted-foreground">
-              {formatTime(currentTimestamp)} / {formatTime(duration)}
-            </div>
-          </div>
-        </div>
-
-        {/* Timeline */}
-        <div className="relative flex-1 bg-background/50 rounded-md border border-border/50 overflow-hidden group">
-          <input
-            type="range"
-            min="0"
-            max={duration || 100}
-            step="0.1"
-            value={currentTimestamp}
-            onChange={handleSeek}
+      {/* Controls + Timeline */}
+      <div className="border-t border-border bg-card/60 backdrop-blur-sm">
+        {/* Playback controls */}
+        <div className="flex items-center gap-3 px-4 py-3">
+          <button
+            onClick={togglePlay}
             disabled={!videoUrl}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-            data-testid="input-timeline-seek"
-          />
-          
-          {/* Playhead */}
-          <div 
-            className="absolute top-0 bottom-0 w-[2px] bg-primary z-20 pointer-events-none"
-            style={{ left: `${duration ? (currentTimestamp / duration) * 100 : 0}%` }}
+            className={cn(
+              "w-8 h-8 rounded-lg flex items-center justify-center transition-all",
+              videoUrl ? "bg-primary hover:bg-primary/90 text-primary-foreground" : "bg-muted/30 text-muted-foreground cursor-not-allowed"
+            )}
+            data-testid="button-play-pause"
           >
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-primary" />
-          </div>
+            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 translate-x-px" />}
+          </button>
+          <span className="text-xs font-mono text-muted-foreground tabular-nums shrink-0">
+            {formatTime(currentTimestamp)} / {formatTime(duration)}
+          </span>
 
-          {/* Events */}
-          {events?.map(event => {
-            const left = duration ? (event.timestamp / duration) * 100 : 0;
-            const eventWidth = event.duration && duration ? (event.duration / duration) * 100 : 0;
-            
-            return (
+          {/* Scrubber */}
+          <div className="relative flex-1 h-5 flex items-center group">
+            <div className="absolute inset-x-0 h-1.5 bg-muted/50 rounded-full overflow-hidden">
               <div
-                key={event.id}
-                className="absolute z-10 cursor-pointer group/marker"
-                style={{ 
-                  left: `${left}%`, 
-                  top: event.type === 'subtitle' ? '60%' : event.type === 'zoom' ? '20%' : '0',
-                  height: event.type === 'cut' ? '100%' : '8px',
-                  width: eventWidth > 0 ? `${eventWidth}%` : '2px',
-                }}
-                onClick={() => seekTo(event.timestamp)}
-                data-testid={`timeline-event-${event.id}`}
-              >
-                {event.type === 'cut' && (
-                  <div className="w-[2px] h-full bg-destructive/80 hover:bg-destructive shadow-[0_0_8px_rgba(255,0,0,0.5)] transition-colors"></div>
-                )}
-                {event.type === 'subtitle' && (
-                  <div className="h-2 w-16 bg-cyan-500/80 hover:bg-cyan-500 rounded-full shadow-[0_0_8px_rgba(0,255,255,0.5)] transition-colors"></div>
-                )}
-                {event.type === 'zoom' && (
-                  <div className="h-2 bg-violet-500/80 hover:bg-violet-500 rounded-full shadow-[0_0_8px_rgba(138,43,226,0.5)] transition-colors" style={{ width: '100%' }}></div>
-                )}
-
-                <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover/marker:opacity-100 transition-opacity bg-popover text-popover-foreground text-[10px] px-2 py-1 rounded whitespace-nowrap shadow-md border border-border flex items-center gap-2 pointer-events-none">
-                  {event.type.toUpperCase()}
-                  <button 
-                    className="hover:text-destructive transition-colors pointer-events-auto"
-                    onClick={(e) => handleDeleteEvent(event.id, e)}
-                    data-testid={`button-delete-event-${event.id}`}
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+                className="h-full bg-primary/60 rounded-full transition-all"
+                style={{ width: `${duration ? (currentTimestamp / duration) * 100 : 0}%` }}
+              />
+              {/* Timeline markers */}
+              {timelineEvents.map(ev => (
+                <div
+                  key={ev.id}
+                  className="absolute top-0 bottom-0 w-0.5 rounded-full opacity-90 cursor-pointer hover:opacity-100 transition-opacity"
+                  style={{ left: `${duration ? (ev.timestamp / duration) * 100 : 0}%`, backgroundColor: ev.color }}
+                  onClick={() => seekTo(ev.timestamp)}
+                  title={ev.label}
+                />
+              ))}
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={duration || 100}
+              step={0.1}
+              value={currentTimestamp}
+              onChange={handleSeekInput}
+              disabled={!videoUrl}
+              className="absolute inset-0 w-full opacity-0 cursor-pointer z-10"
+              data-testid="input-timeline-seek"
+            />
+          </div>
         </div>
+
+        {/* Timeline event blocks */}
+        {timelineEvents.length > 0 && (
+          <div className="px-4 pb-3 flex flex-wrap gap-1.5">
+            {timelineEvents.map(ev => (
+              <button
+                key={ev.id}
+                onClick={() => seekTo(ev.timestamp)}
+                className={cn(
+                  "flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full border transition-all hover:scale-105",
+                  eventBadgeColors[ev.type]
+                )}
+                data-testid={`timeline-event-${ev.id}`}
+                title={`Jump to ${Math.floor(ev.timestamp / 60)}:${String(Math.floor(ev.timestamp % 60)).padStart(2, '0')}`}
+              >
+                {eventIcons[ev.type]}
+                {ev.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
-    </div>
+    </main>
   );
 }
 
-function RightPanel({ sessionId, currentTimestamp, credits, deductCredits }: { sessionId: number | null, currentTimestamp: number, credits: number, deductCredits: (amount: number) => void }) {
-  const { data: messages, isLoading: messagesLoading } = useListChatMessages(sessionId || 0, {
-    query: { enabled: !!sessionId, queryKey: getListChatMessagesQueryKey(sessionId || 0) },
-  });
-  const sendMessage = useSendChatMessage();
-  const queryClient = useQueryClient();
+// ─── Right Panel ───────────────────────────────────────────────────────────────
+
+function RightPanel({
+  credits,
+  currentTimestamp,
+  messages,
+  isSending,
+  onSend,
+}: {
+  credits: number;
+  currentTimestamp: number;
+  messages: ChatMessage[];
+  isSending: boolean;
+  onSend: (text: string) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [content, setContent] = useState("");
+  const [input, setInput] = useState("");
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, sendMessage.isPending]);
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, isSending]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!content.trim() || !sessionId || sendMessage.isPending || credits <= 0) return;
-
-    sendMessage.mutate(
-      { id: sessionId, data: { content, currentTimestamp } },
-      {
-        onSuccess: (response) => {
-          setContent("");
-          if (response.command) {
-            deductCredits(CREDIT_COST);
-          }
-          queryClient.invalidateQueries({ queryKey: getListChatMessagesQueryKey(sessionId) });
-          queryClient.invalidateQueries({ queryKey: getListSessionEventsQueryKey(sessionId) });
-          queryClient.invalidateQueries({ queryKey: getGetSessionQueryKey(sessionId) });
-        }
-      }
-    );
+    const trimmed = input.trim();
+    if (!trimmed || isSending || credits <= 0) return;
+    onSend(trimmed);
+    setInput("");
   };
 
-  const getCommandColor = (cmd: string | null) => {
-    switch(cmd) {
-      case 'cut': return 'bg-destructive/10 text-destructive border-destructive/20';
-      case 'subtitle': return 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20';
-      case 'zoom': return 'bg-violet-500/10 text-violet-500 border-violet-500/20';
-      default: return 'bg-muted text-muted-foreground border-border';
-    }
-  };
+  const commandHints: { cmd: CommandType; icon: React.ReactNode; label: string }[] = [
+    { cmd: 'cut', icon: <Scissors className="w-3 h-3" />, label: 'cut' },
+    { cmd: 'subtitle', icon: <Type className="w-3 h-3" />, label: 'subtitle' },
+    { cmd: 'zoom', icon: <ZoomIn className="w-3 h-3" />, label: 'zoom' },
+  ];
 
   return (
-    <div className="w-[320px] h-full flex flex-col border-l border-border bg-card">
-      <div className="p-4 border-b border-border">
-        <h2 className="font-semibold text-sm">AI Assistant</h2>
-      </div>
-
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
-        <div className="space-y-4">
-          {messagesLoading ? (
-            <div className="space-y-4">
-              <Skeleton className="h-16 w-[80%] rounded-lg" />
-              <Skeleton className="h-16 w-[80%] rounded-lg ml-auto" />
-            </div>
-          ) : messages?.map(msg => (
-            <div 
-              key={msg.id} 
-              className={cn(
-                "flex flex-col max-w-[85%] rounded-xl p-3 text-sm",
-                msg.role === 'user' 
-                  ? "ml-auto bg-primary text-primary-foreground rounded-br-none" 
-                  : "bg-muted text-foreground rounded-bl-none border border-border"
-              )}
-            >
-              {msg.role === 'assistant' && msg.command && (
-                <div className="mb-2">
-                  <span className={cn(
-                    "text-[10px] font-mono px-1.5 py-0.5 rounded border",
-                    getCommandColor(msg.command)
-                  )}>
-                    {msg.command.toUpperCase()}
-                  </span>
-                </div>
-              )}
-              <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-            </div>
-          ))}
-
-          {sendMessage.isPending && (
-            <div className="bg-muted text-foreground rounded-xl rounded-bl-none border border-border p-3 text-sm max-w-[85%] flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-primary animate-bounce" />
-              <div className="w-2 h-2 rounded-full bg-primary animate-bounce [animation-delay:0.2s]" />
-              <div className="w-2 h-2 rounded-full bg-primary animate-bounce [animation-delay:0.4s]" />
-            </div>
-          )}
+    <aside className="w-[300px] shrink-0 h-full flex flex-col border-l border-border bg-card/80 backdrop-blur-sm">
+      {/* Header */}
+      <div className="px-4 py-3.5 border-b border-border flex items-center gap-2.5">
+        <div className="w-6 h-6 rounded-md bg-primary/20 flex items-center justify-center">
+          <Sparkles className="w-3.5 h-3.5 text-primary" />
         </div>
+        <span className="font-semibold text-sm">AI Assistant</span>
       </div>
 
-      <div className="p-4 bg-background/50 border-t border-border mt-auto">
-        <form onSubmit={handleSubmit} className="relative">
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center gap-3 py-8 text-center">
+            <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
+              <Sparkles className="w-5 h-5 text-primary/60" />
+            </div>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">Ask AI to edit your video</p>
+              <p className="text-[11px] text-muted-foreground/60 mt-0.5">Try a command below to get started</p>
+            </div>
+            <div className="flex flex-wrap gap-1.5 justify-center mt-1">
+              {commandHints.map(({ cmd, icon, label }) => (
+                <button
+                  key={cmd}
+                  onClick={() => { setInput(label); }}
+                  className={cn("flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-full border transition-all hover:scale-105", COMMAND_COLORS[cmd])}
+                >
+                  {icon}{label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map(msg => (
+          <div
+            key={msg.id}
+            className={cn(
+              "flex flex-col max-w-[88%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
+              msg.role === 'user'
+                ? "ml-auto bg-primary text-primary-foreground rounded-br-sm"
+                : "bg-muted/60 text-foreground rounded-bl-sm border border-border/60"
+            )}
+          >
+            {msg.role === 'assistant' && msg.command && (
+              <span className={cn("inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md border mb-1.5 self-start", COMMAND_COLORS[msg.command])}>
+                {msg.command === 'cut' && <Scissors className="w-2.5 h-2.5" />}
+                {msg.command === 'subtitle' && <Type className="w-2.5 h-2.5" />}
+                {msg.command === 'zoom' && <ZoomIn className="w-2.5 h-2.5" />}
+                {msg.command.toUpperCase()}
+              </span>
+            )}
+            <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+          </div>
+        ))}
+
+        {isSending && (
+          <div className="bg-muted/60 border border-border/60 rounded-2xl rounded-bl-sm px-3.5 py-2.5 max-w-[88%] flex items-center gap-1.5">
+            {[0, 0.15, 0.3].map((delay, i) => (
+              <div key={i} className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: `${delay}s` }} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Input area */}
+      <div className="p-3 border-t border-border bg-background/30 space-y-2">
+        <form onSubmit={handleSubmit} className="flex gap-2">
           <Input
-            value={content}
-            onChange={e => setContent(e.target.value)}
-            placeholder={credits <= 0 ? "No credits remaining" : "Ask AI to edit..."}
-            className="pr-10 bg-background border-border focus-visible:ring-primary/50 text-sm"
-            disabled={sendMessage.isPending || !sessionId || credits <= 0}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder={credits <= 0 ? "No credits remaining" : "Ask AI to edit…"}
+            disabled={isSending || credits <= 0}
+            className="flex-1 h-9 text-xs bg-background/80 border-border focus-visible:ring-primary/40"
             data-testid="input-chat-message"
           />
-          <Button 
-            type="submit" 
-            size="icon" 
-            variant="ghost" 
-            className="absolute right-1 top-1 w-8 h-8 text-primary hover:text-primary hover:bg-primary/10"
-            disabled={!content.trim() || sendMessage.isPending || !sessionId || credits <= 0}
+          <Button
+            type="submit"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            disabled={!input.trim() || isSending || credits <= 0}
             data-testid="button-send-chat"
           >
-            <Play className="w-4 h-4 fill-current" />
+            <Send className="w-3.5 h-3.5" />
           </Button>
         </form>
-        <div className="mt-2 text-center">
-          {credits <= 0
-            ? <p className="text-[10px] text-destructive font-medium">Out of credits</p>
-            : <p className="text-[10px] text-muted-foreground">Try: cut, subtitle, zoom · costs {CREDIT_COST} CR</p>
-          }
+        <div className="flex items-center justify-between px-0.5">
+          {credits <= 0 ? (
+            <p className="text-[10px] text-red-400 font-medium">Out of credits</p>
+          ) : (
+            <div className="flex items-center gap-1 flex-wrap">
+              {commandHints.map(({ cmd, icon, label }) => (
+                <button
+                  key={cmd}
+                  onClick={() => setInput(label)}
+                  className={cn("flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full border transition-all hover:scale-105", COMMAND_COLORS[cmd])}
+                >
+                  {icon}{label}
+                </button>
+              ))}
+            </div>
+          )}
+          <span className={cn("text-[10px] font-mono shrink-0 ml-1", credits <= 5 ? "text-red-400" : "text-muted-foreground")}>
+            {credits} CR
+          </span>
         </div>
       </div>
-    </div>
+    </aside>
   );
 }
 
-// --- Main App Inner (must be inside QueryClientProvider) ---
-
-const CREDIT_COST = 5;
-const STARTING_CREDITS = 50;
+// ─── App Inner ─────────────────────────────────────────────────────────────────
 
 function AppInner() {
-  useEffect(() => {
-    document.documentElement.classList.add("dark");
+  const sessionId = useActiveSession();
+
+  const [credits, setCredits] = useState(STARTING_CREDITS);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoName, setVideoName] = useState<string | null>(null);
+  const [currentTimestamp, setCurrentTimestamp] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
+  const [isSending, setIsSending] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => { document.documentElement.classList.add("dark"); }, []);
+
+  const handleFileSelect = useCallback((file: File) => {
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setVideoUrl(URL.createObjectURL(file));
+    setVideoName(file.name);
+    setCurrentTimestamp(0);
+    setDuration(0);
+  }, [videoUrl]);
+
+  const handleSend = useCallback((text: string) => {
+    const userMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: text,
+      createdAt: new Date(),
+    };
+    setMessages(prev => [...prev, userMsg]);
+    setIsSending(true);
+
+    setTimeout(() => {
+      const result = processCommand(text, currentTimestamp);
+
+      const assistantMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: result.message,
+        command: result.command ?? undefined,
+        createdAt: new Date(),
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+
+      if (result.command) {
+        setCredits(prev => Math.max(0, prev - CREDIT_COST));
+
+        if (result.timelineEvent) {
+          setTimelineEvents(prev => [...prev, { ...result.timelineEvent!, id: crypto.randomUUID() }]);
+        }
+
+        if (result.subtitles) {
+          setSubtitles(result.subtitles);
+        }
+      }
+
+      setIsSending(false);
+    }, 800 + Math.random() * 400);
+  }, [currentTimestamp]);
+
+  const handleExport = useCallback((resolution: Resolution) => {
+    setIsExporting(true);
+    setTimeout(() => {
+      setIsExporting(false);
+      setToast(`Exported successfully at ${resolution} ✓`);
+    }, 2200);
   }, []);
 
-  const sessionId = useActiveSession();
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
-  const [currentTimestamp, setCurrentTimestamp] = useState(0);
-  const [credits, setCredits] = useState(STARTING_CREDITS);
-
-  const deductCredits = (amount: number) => {
-    setCredits(prev => Math.max(0, prev - amount));
-  };
-
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground selection:bg-primary/30">
-      <LeftPanel sessionId={sessionId} videoUrl={videoUrl} setVideoUrl={setVideoUrl} credits={credits} />
-      <CenterPanel sessionId={sessionId} videoUrl={videoUrl} currentTimestamp={currentTimestamp} setCurrentTimestamp={setCurrentTimestamp} />
-      <RightPanel sessionId={sessionId} currentTimestamp={currentTimestamp} credits={credits} deductCredits={deductCredits} />
+    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
+      <LeftPanel
+        sessionId={sessionId}
+        videoUrl={videoUrl}
+        videoName={videoName}
+        credits={credits}
+        onFileSelect={handleFileSelect}
+        onExport={handleExport}
+        isExporting={isExporting}
+      />
+      <CenterPanel
+        videoUrl={videoUrl}
+        currentTimestamp={currentTimestamp}
+        duration={duration}
+        timelineEvents={timelineEvents}
+        subtitles={subtitles}
+        onTimeUpdate={setCurrentTimestamp}
+        onDurationLoad={setDuration}
+        onSeek={setCurrentTimestamp}
+      />
+      <RightPanel
+        credits={credits}
+        currentTimestamp={currentTimestamp}
+        messages={messages}
+        isSending={isSending}
+        onSend={handleSend}
+      />
+      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </div>
   );
 }
+
+// ─── Root ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
   return (
