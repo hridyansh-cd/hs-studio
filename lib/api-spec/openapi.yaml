@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: editor
+    description: Video editor operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,172 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /editor/sessions:
+    get:
+      operationId: listSessions
+      tags: [editor]
+      summary: List editor sessions
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EditorSession"
+    post:
+      operationId: createSession
+      tags: [editor]
+      summary: Create a new editor session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditorSessionInput"
+      responses:
+        "201":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EditorSession"
+  /editor/sessions/{id}:
+    get:
+      operationId: getSession
+      tags: [editor]
+      summary: Get session with its timeline events
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Session with timeline events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EditorSessionWithEvents"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /editor/sessions/{id}/events:
+    get:
+      operationId: listSessionEvents
+      tags: [editor]
+      summary: List timeline events for a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TimelineEvent"
+    post:
+      operationId: createTimelineEvent
+      tags: [editor]
+      summary: Add a timeline event (cut, subtitle, zoom)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimelineEventInput"
+      responses:
+        "201":
+          description: Created event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineEvent"
+  /editor/sessions/{id}/events/{eventId}:
+    delete:
+      operationId: deleteTimelineEvent
+      tags: [editor]
+      summary: Delete a timeline event
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: eventId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /editor/sessions/{id}/chat:
+    get:
+      operationId: listChatMessages
+      tags: [editor]
+      summary: List chat messages for a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of chat messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChatMessage"
+    post:
+      operationId: sendChatMessage
+      tags: [editor]
+      summary: Send a chat command (cut, subtitle, zoom) and get a simulated response
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatMessageInput"
+      responses:
+        "200":
+          description: AI response with optional timeline event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +201,182 @@ components:
           type: string
       required:
         - status
-
+    EditorSession:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        credits:
+          type: integer
+      required:
+        - id
+        - name
+        - createdAt
+        - credits
+    EditorSessionInput:
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+        - name
+    EditorSessionWithEvents:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        credits:
+          type: integer
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/TimelineEvent"
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+      required:
+        - id
+        - name
+        - createdAt
+        - credits
+        - events
+        - messages
+    TimelineEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+        sessionId:
+          type: integer
+        type:
+          type: string
+          enum: [cut, subtitle, zoom]
+        timestamp:
+          type: number
+          description: Position in seconds on the timeline
+        duration:
+          type: ["number", "null"]
+          description: Duration in seconds (for subtitle/zoom)
+        label:
+          type: ["string", "null"]
+          description: Subtitle text or zoom description
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - sessionId
+        - type
+        - timestamp
+        - duration
+        - label
+        - createdAt
+    TimelineEventInput:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [cut, subtitle, zoom]
+        timestamp:
+          type: number
+        duration:
+          type: ["number", "null"]
+        label:
+          type: ["string", "null"]
+      required:
+        - type
+        - timestamp
+    ChatMessage:
+      type: object
+      properties:
+        id:
+          type: integer
+        sessionId:
+          type: integer
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        command:
+          type: ["string", "null"]
+          enum: [cut, subtitle, zoom, null]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - sessionId
+        - role
+        - content
+        - command
+        - createdAt
+    ChatMessageInput:
+      type: object
+      properties:
+        content:
+          type: string
+        currentTimestamp:
+          type: number
+          description: Current playhead position in seconds
+      required:
+        - content
+        - currentTimestamp
+    ChatResponse:
+      type: object
+      properties:
+        message:
+          $ref: "#/components/schemas/ChatMessage"
+        assistantMessage:
+          $ref: "#/components/schemas/ChatMessage"
+        timelineEvent:
+          type: ["object", "null"]
+          properties:
+            id:
+              type: integer
+            sessionId:
+              type: integer
+            type:
+              type: string
+              enum: [cut, subtitle, zoom]
+            timestamp:
+              type: number
+            duration:
+              type: ["number", "null"]
+            label:
+              type: ["string", "null"]
+            createdAt:
+              type: string
+              format: date-time
+          required:
+            - id
+            - sessionId
+            - type
+            - timestamp
+            - duration
+            - label
+            - createdAt
+        creditsRemaining:
+          type: integer
+      required:
+        - message
+        - assistantMessage
+        - creditsRemaining
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
