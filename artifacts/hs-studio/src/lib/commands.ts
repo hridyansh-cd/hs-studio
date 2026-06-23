@@ -1,97 +1,86 @@
-export type CommandType = 'cut' | 'subtitle' | 'zoom';
+import type { CommandType, Effect, Subtitle } from "@/types";
 
-export interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  command?: CommandType;
-  createdAt: Date;
-}
-
-export interface TimelineEvent {
-  id: string;
-  type: CommandType;
-  label: string;
-  timestamp: number;
-  color: string;
-}
-
-export interface Subtitle {
-  id: string;
-  text: string;
-}
+export type { CommandType };
 
 export interface CommandResult {
   message: string;
   command: CommandType | null;
-  timelineEvent?: Omit<TimelineEvent, 'id'>;
-  subtitles?: Subtitle[];
-}
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
+  effect?: Omit<Effect, "id">;
+  subtitles?: Omit<Subtitle, "id">[];
+  trimMarker?: number;
 }
 
 export function detectCommand(input: string): CommandType | null {
   const lower = input.toLowerCase().trim();
-  if (lower.includes('cut')) return 'cut';
-  if (lower.includes('subtitle') || lower.includes('sub')) return 'subtitle';
-  if (lower.includes('zoom')) return 'zoom';
+  if (lower.includes("cut")) return "cut";
+  if (lower.includes("subtitle") || lower.includes("sub")) return "subtitle";
+  if (lower.includes("zoom")) return "zoom";
   return null;
 }
 
-const COMMAND_RESPONSES: Record<CommandType, (ts: number) => CommandResult> = {
-  cut: (ts) => ({
-    message: `Video cut applied at ${formatTime(ts)}. The clip has been trimmed cleanly at this point.`,
-    command: 'cut',
-    timelineEvent: {
-      type: 'cut',
-      label: 'Video cut applied',
-      timestamp: ts,
-      color: '#ef4444',
-    },
-  }),
-  subtitle: (ts) => ({
-    message: `Subtitles generated at ${formatTime(ts)}. Two caption blocks have been overlaid on the video.`,
-    command: 'subtitle',
-    timelineEvent: {
-      type: 'subtitle',
-      label: 'Subtitles generated',
-      timestamp: ts,
-      color: '#06b6d4',
-    },
-    subtitles: [
-      { id: crypto.randomUUID(), text: 'Hello World 🔥' },
-      { id: crypto.randomUUID(), text: 'AI Editing 😎' },
-    ],
-  }),
-  zoom: (ts) => ({
-    message: `Zoom effect added at ${formatTime(ts)}. A smooth zoom-in transition has been applied to the clip.`,
-    command: 'zoom',
-    timelineEvent: {
-      type: 'zoom',
-      label: 'Zoom effect added',
-      timestamp: ts,
-      color: '#8b5cf6',
-    },
-  }),
-};
+function fmt(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return m > 0 ? `${m}:${sec.toString().padStart(2, "0")}` : `${sec}s`;
+}
 
-export function processCommand(input: string, timestamp: number): CommandResult {
+export function processCommand(
+  input: string,
+  currentTime: number,
+  duration: number
+): CommandResult {
   const cmd = detectCommand(input);
+
   if (!cmd) {
     return {
-      message: 'Command not recognized. Try: cut, subtitle, or zoom.',
+      message:
+        "Command not recognized. Available commands:\n• cut — add a trim marker\n• subtitle — generate subtitle segments\n• zoom — add a zoom effect",
       command: null,
     };
   }
-  return COMMAND_RESPONSES[cmd](timestamp);
+
+  switch (cmd) {
+    case "cut":
+      return {
+        message: `Trim marker added at ${fmt(currentTime)}. Drag the handles on the Video track to adjust the clip range.`,
+        command: "cut",
+        trimMarker: currentTime,
+      };
+
+    case "subtitle": {
+      const segDuration = Math.min(3, duration / 4 || 3);
+      const start1 = Math.max(0, currentTime);
+      const end1 = Math.min(duration || 999, start1 + segDuration);
+      const start2 = end1;
+      const end2 = Math.min(duration || 999, start2 + segDuration);
+      return {
+        message: `Subtitle segments created at ${fmt(start1)}–${fmt(end1)} and ${fmt(start2)}–${fmt(end2)}. Edit them in the subtitle panel below the timeline. Connect OpenAI to generate real speech-to-text subtitles.`,
+        command: "subtitle",
+        subtitles: [
+          { text: "Edit this subtitle", start: start1, end: end1 },
+          { text: "Add your caption here", start: start2, end: end2 },
+        ],
+      };
+    }
+
+    case "zoom": {
+      const effectDuration = Math.min(4, (duration || 10) / 3);
+      return {
+        message: `Zoom-in effect added from ${fmt(currentTime)} to ${fmt(currentTime + effectDuration)}. Visible on the FX track in the timeline.`,
+        command: "zoom",
+        effect: {
+          type: "zoom-in",
+          label: "Zoom In",
+          start: currentTime,
+          end: Math.min(duration || 999, currentTime + effectDuration),
+        },
+      };
+    }
+  }
 }
 
 export const COMMAND_COLORS: Record<CommandType, string> = {
-  cut: 'bg-red-500/10 text-red-400 border-red-500/20',
-  subtitle: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-  zoom: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
+  cut: "bg-red-500/10 text-red-400 border-red-500/20",
+  subtitle: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
+  zoom: "bg-violet-500/10 text-violet-400 border-violet-500/20",
 };

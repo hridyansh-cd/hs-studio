@@ -1,0 +1,193 @@
+Upgrade HS Studio Phase 1 Core Editor Features
+
+IMPORTANT:
+Do not redesign the UI.
+Do not remove existing functionality.
+Keep the current premium dark theme and 3-panel layout.
+
+PRIMARY GOAL:
+Transform HS Studio from a demo MVP into a functional video editor foundation.
+
+FEATURES
+
+1. Real Timeline System
+
+* Replace simple action chips with a professional timeline.
+* Display total video duration.
+* Display current playback position.
+* Interactive playhead.
+* Click timeline to seek video.
+* Smooth scrubbing.
+* Timeline zoom controls.
+* Responsive timeline layout.
+
+2. Multi-Track Timeline
+   Create separate tracks:
+
+* Video Track
+* Subtitle Track
+* Effects Track
+
+Requirements:
+
+* Track labels.
+* Track visibility toggles.
+* Proper alignment with video duration.
+* Time ruler.
+
+3. Real Trim Tool
+   Add:
+
+* Trim Start Handle
+* Trim End Handle
+* Visual trim selection
+* Trim markers
+
+Requirements:
+
+* Drag handles.
+* Live preview updates.
+* Prevent invalid trim ranges.
+* Store trim data in project state.
+
+Project Structure:
+
+{
+trimStart,
+trimEnd
+}
+
+4. Video Metadata Panel
+   After upload display:
+
+* File Name
+* Duration
+* Resolution
+* Frame Rate
+* File Size
+* Aspect Ratio
+
+Update automatically when a new video is uploaded.
+
+5. Effects System Foundation
+
+Create effect objects:
+
+{
+id,
+type,
+start,
+end
+}
+
+Supported Effects:
+
+* Zoom In
+* Zoom Out
+* Fade In
+* Fade Out
+
+Requirements:
+
+* Effects appear on timeline.
+* Effects can be edited.
+* Effects can be deleted.
+* Live preview support.
+
+6. AI Command Upgrade
+
+Current Commands:
+
+cut
+subtitle
+zoom
+
+Upgrade behavior:
+
+cut:
+
+* Create trim marker on timeline.
+
+subtitle:
+
+* Generate real subtitles using subtitle system.
+
+zoom:
+
+* Create effect segment on effects track.
+
+Unknown commands:
+
+* Return useful guidance.
+
+7. Project Save System
+
+Create project structure:
+
+{
+video,
+subtitles,
+effects,
+timeline,
+trim,
+settings
+}
+
+Features:
+
+* Save Project
+* Load Project
+* Auto Save
+* Restore previous session
+
+Store project data locally.
+
+8. Playback Improvements
+
+Add:
+
+* Frame-accurate seeking
+* Play
+* Pause
+* Seek
+* Skip Forward
+* Skip Backward
+
+Show current time and total duration.
+
+9. Performance Optimization
+
+Requirements:
+
+* Use React hooks efficiently.
+* Avoid unnecessary re-renders.
+* Memoize expensive operations.
+* Handle large videos smoothly.
+
+10. Code Refactor
+
+Create folders:
+
+src/components/
+src/hooks/
+src/lib/
+src/types/
+
+Move business logic out of App.tsx.
+
+Create reusable components.
+
+11. Production Quality
+
+Requirements:
+
+* No mock data.
+* No placeholder buttons.
+* No console errors.
+* Responsive design.
+* Type-safe architecture.
+* Clean code.
+* Maintainable structure.
+
+Before adding any feature:
+Fix all existing bugs and ensure the application runs correctly.
