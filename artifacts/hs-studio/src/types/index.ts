@@ -38,6 +38,7 @@ export interface VideoMetadata {
 }
 
 export interface Project {
+  name: string;
   subtitles: Subtitle[];
   effects: Effect[];
   trim: TrimState;

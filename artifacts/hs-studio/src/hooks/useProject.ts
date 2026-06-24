@@ -13,9 +13,11 @@ import { saveProject, loadProject, DEFAULT_PROJECT } from "@/lib/project";
  * typed mutators so App.tsx only orchestrates UI, not data logic.
  */
 export function useProject() {
-  const [project, setProject] = useState<Project>(
-    () => loadProject() ?? DEFAULT_PROJECT
-  );
+  const [project, setProject] = useState<Project>(() => {
+    const saved = loadProject();
+    // Merge with defaults so newly-added fields (e.g. `name`) are never undefined
+    return saved ? { ...DEFAULT_PROJECT, ...saved } : DEFAULT_PROJECT;
+  });
 
   // Debounced auto-save on every change
   useEffect(() => {

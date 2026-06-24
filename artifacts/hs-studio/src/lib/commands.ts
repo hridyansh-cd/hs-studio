@@ -54,7 +54,7 @@ export function processCommand(
       const start2 = end1;
       const end2 = Math.min(duration || 999, start2 + segDuration);
       return {
-        message: `Subtitle segments created at ${fmt(start1)}–${fmt(end1)} and ${fmt(start2)}–${fmt(end2)}. Edit them in the subtitle panel below the timeline. Connect OpenAI to generate real speech-to-text subtitles.`,
+        message: `Subtitle segments created at ${fmt(start1)}–${fmt(end1)} and ${fmt(start2)}–${fmt(end2)}. Click the Subtitles tab in the chat panel to edit the text. Speech-to-text transcription coming in Phase 2.`,
         command: "subtitle",
         subtitles: [
           { text: "Edit this subtitle", start: start1, end: end1 },

@@ -3,6 +3,7 @@ import type { Project } from "@/types";
 const PROJECT_KEY = "hs-studio-project";
 
 export const DEFAULT_PROJECT: Project = {
+  name: "My Project",
   subtitles: [],
   effects: [],
   trim: { start: 0, end: 0 },

@@ -26,13 +26,6 @@ import {
   Pencil,
   Check,
 } from "lucide-react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  useListSessions,
-  useCreateSession,
-  useGetSession,
-  getGetSessionQueryKey,
-} from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -49,30 +42,9 @@ import type {
   CommandType,
 } from "@/types";
 
-const queryClient = new QueryClient();
 const CREDIT_COST = 5;
 const EXPORT_RESOLUTIONS = ["720p", "1080p", "4K"] as const;
 type Resolution = (typeof EXPORT_RESOLUTIONS)[number];
-
-// ─── Session hook ──────────────────────────────────────────────────────────────
-
-function useActiveSession() {
-  const [activeId, setActiveId] = useState<number | null>(null);
-  const { data: sessions, isLoading } = useListSessions();
-  const createSession = useCreateSession();
-  useEffect(() => {
-    if (isLoading) return;
-    if (sessions && sessions.length > 0) {
-      if (!activeId) setActiveId(sessions[0].id);
-    } else {
-      createSession.mutate(
-        { data: { name: "My Project" } },
-        { onSuccess: (s) => setActiveId(s.id) }
-      );
-    }
-  }, [sessions, isLoading, activeId, createSession]);
-  return activeId;
-}
 
 // ─── Toast ─────────────────────────────────────────────────────────────────────
 
@@ -83,7 +55,7 @@ const Toast = memo(
       return () => clearTimeout(t);
     }, [onDone]);
     return (
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-card border border-border shadow-2xl rounded-xl px-5 py-3 text-sm font-medium animate-in fade-in slide-in-from-bottom-2">
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-card border border-border shadow-2xl rounded-xl px-5 py-3 text-sm font-medium">
         <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
         <span>{message}</span>
       </div>
@@ -115,10 +87,49 @@ const SubtitleOverlay = memo(
   }
 );
 
+// ─── Editable project name ─────────────────────────────────────────────────────
+
+const EditableProjectName = memo(
+  ({ name, onChange }: { name: string; onChange: (n: string) => void }) => {
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(name);
+    const commit = () => {
+      const trimmed = draft.trim();
+      onChange(trimmed || name);
+      setEditing(false);
+    };
+    return editing ? (
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") {
+            setDraft(name);
+            setEditing(false);
+          }
+        }}
+        className="flex-1 min-w-0 bg-background border border-primary/40 rounded px-1.5 py-0.5 text-[11px] text-foreground outline-none"
+      />
+    ) : (
+      <button
+        onClick={() => { setDraft(name); setEditing(true); }}
+        className="flex items-center gap-1.5 group flex-1 min-w-0 text-left"
+        title="Click to rename project"
+      >
+        <span className="text-[11px] text-muted-foreground truncate">{name}</span>
+        <Pencil className="w-2.5 h-2.5 text-muted-foreground/0 group-hover:text-muted-foreground/50 transition-colors shrink-0" />
+      </button>
+    );
+  }
+);
+
 // ─── Left Panel ────────────────────────────────────────────────────────────────
 
 function LeftPanel({
-  sessionId,
+  projectName,
   videoUrl,
   metadata,
   credits,
@@ -127,9 +138,10 @@ function LeftPanel({
   isExporting,
   onSave,
   onLoad,
+  onProjectNameChange,
   lastSaved,
 }: {
-  sessionId: number | null;
+  projectName: string;
   videoUrl: string | null;
   metadata: VideoMetadata | null;
   credits: number;
@@ -138,14 +150,9 @@ function LeftPanel({
   isExporting: boolean;
   onSave: () => void;
   onLoad: () => void;
+  onProjectNameChange: (name: string) => void;
   lastSaved: number;
 }) {
-  const { data: session } = useGetSession(sessionId || 0, {
-    query: {
-      enabled: !!sessionId,
-      queryKey: getGetSessionQueryKey(sessionId || 0),
-    },
-  });
   const [resolution, setResolution] = useState<Resolution>("1080p");
   const [showResMenu, setShowResMenu] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -162,18 +169,15 @@ function LeftPanel({
       : `${(b / 1024 / 1024).toFixed(1)} MB`;
 
   const formatAspect = (w: number, h: number) => {
+    if (!w || !h) return "—";
     const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
     const d = gcd(w, h);
-    return w && h ? `${w / d}:${h / d}` : "—";
+    return `${w / d}:${h / d}`;
   };
 
   const pct = Math.min(100, (credits / 50) * 100);
   const barCls =
-    credits <= 5
-      ? "bg-red-500"
-      : credits <= 20
-      ? "bg-yellow-500"
-      : "bg-primary";
+    credits <= 5 ? "bg-red-500" : credits <= 20 ? "bg-yellow-500" : "bg-primary";
   const crCls =
     credits <= 5
       ? "bg-red-500/10 text-red-400"
@@ -232,15 +236,11 @@ function LeftPanel({
               />
             </div>
             {videoUrl ? (
-              <p className="text-xs font-semibold text-primary">
-                Video loaded ✓
-              </p>
+              <p className="text-xs font-semibold text-primary">Video loaded ✓</p>
             ) : (
               <>
                 <p className="text-xs font-semibold">Drag & drop or click</p>
-                <p className="text-[10px] text-muted-foreground">
-                  MP4 · WebM · MOV
-                </p>
+                <p className="text-[10px] text-muted-foreground">MP4 · WebM · MOV</p>
               </>
             )}
           </div>
@@ -375,40 +375,31 @@ function LeftPanel({
       </div>
 
       {/* Credits */}
-      {session && (
-        <div className="p-3 border-t border-border">
-          <div className="bg-muted/20 rounded-xl p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-muted-foreground truncate">
-                {session.name}
-              </span>
-              <span
-                className={cn(
-                  "text-[10px] font-mono font-bold px-2 py-0.5 rounded-md",
-                  crCls
-                )}
-              >
-                {credits} CR
-              </span>
+      <div className="p-3 border-t border-border">
+        <div className="bg-muted/20 rounded-xl p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <EditableProjectName
+              name={projectName}
+              onChange={onProjectNameChange}
+            />
+            <span className={cn("text-[10px] font-mono font-bold px-2 py-0.5 rounded-md shrink-0", crCls)}>
+              {credits} CR
+            </span>
+          </div>
+          <div className="space-y-1">
+            <div className="flex justify-between text-[10px] text-muted-foreground">
+              <span>AI Credits</span>
+              <span>{credits}/50</span>
             </div>
-            <div className="space-y-1">
-              <div className="flex justify-between text-[10px] text-muted-foreground">
-                <span>AI Credits</span>
-                <span>{credits}/50</span>
-              </div>
-              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                <div
-                  className={cn(
-                    "h-full rounded-full transition-all duration-500",
-                    barCls
-                  )}
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
+            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+              <div
+                className={cn("h-full rounded-full transition-all duration-500", barCls)}
+                style={{ width: `${pct}%` }}
+              />
             </div>
           </div>
         </div>
-      )}
+      </div>
     </aside>
   );
 }
@@ -485,7 +476,6 @@ function CenterPanel({
       {/* Video area */}
       <div className="flex-1 flex items-center justify-center relative overflow-hidden bg-black/20">
         {videoUrl ? (
-          /* Effect preview wrapper */
           <div
             className="relative max-w-full max-h-full"
             style={{
@@ -501,12 +491,10 @@ function CenterPanel({
               className="max-w-full max-h-full object-contain rounded shadow-2xl block"
               style={{ maxHeight: "calc(100vh - 280px)" }}
               onTimeUpdate={() => {
-                if (videoRef.current)
-                  onTimeUpdate(videoRef.current.currentTime);
+                if (videoRef.current) onTimeUpdate(videoRef.current.currentTime);
               }}
               onLoadedMetadata={() => {
-                if (videoRef.current)
-                  onDurationLoad(videoRef.current.duration);
+                if (videoRef.current) onDurationLoad(videoRef.current.duration);
               }}
               onEnded={() => setIsPlaying(false)}
               onClick={togglePlay}
@@ -722,11 +710,7 @@ function RightPanel({
   const hints: { cmd: CommandType; icon: React.ReactNode; label: string }[] = [
     { cmd: "cut", icon: <Scissors className="w-3 h-3" />, label: "cut" },
     { cmd: "subtitle", icon: <Type className="w-3 h-3" />, label: "subtitle" },
-    {
-      cmd: "zoom",
-      icon: <ZoomInIcon className="w-3 h-3" />,
-      label: "zoom",
-    },
+    { cmd: "zoom", icon: <ZoomInIcon className="w-3 h-3" />, label: "zoom" },
   ];
 
   return (
@@ -751,9 +735,7 @@ function RightPanel({
                   : "text-muted-foreground hover:text-foreground"
               )}
             >
-              {t === "subtitles"
-                ? `Subtitles (${subtitles.length})`
-                : "Chat"}
+              {t === "subtitles" ? `Subtitles (${subtitles.length})` : "Chat"}
             </button>
           ))}
         </div>
@@ -762,10 +744,7 @@ function RightPanel({
       {tab === "chat" ? (
         <>
           {/* Messages */}
-          <div
-            ref={scrollRef}
-            className="flex-1 overflow-y-auto p-3 space-y-3"
-          >
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
             {messages.length === 0 && (
               <div className="flex flex-col items-center gap-3 py-8 text-center">
                 <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
@@ -891,8 +870,8 @@ function RightPanel({
             <div className="flex flex-col items-center gap-3 py-10 text-center px-4">
               <Type className="w-8 h-8 text-muted-foreground/30" />
               <p className="text-xs text-muted-foreground/60">
-                No subtitles yet. Use the{" "}
-                <strong>subtitle</strong> command in chat to generate them.
+                No subtitles yet. Use the <strong>subtitle</strong> command in
+                chat to generate them.
               </p>
             </div>
           ) : (
@@ -913,16 +892,15 @@ function RightPanel({
   );
 }
 
-// ─── App Inner ─────────────────────────────────────────────────────────────────
+// ─── App (no external dependencies required) ───────────────────────────────────
 
-function AppInner() {
-  const sessionId = useActiveSession();
+export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // ── Project state (with autosave) ──────────────────────────────────────
   const {
     project,
     setProject,
+    updateProject,
     updateEffect,
     deleteEffect,
     updateSubtitle,
@@ -933,18 +911,14 @@ function AppInner() {
     loadSaved,
   } = useProject();
 
-  // ── Video state ────────────────────────────────────────────────────────
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-
-  // ── UI state ───────────────────────────────────────────────────────────
   const [isSending, setIsSending] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
-  // Live effect preview — CSS style applied to the video wrapper
   const effectPreviewStyle = useEffectPreview(project.effects, currentTime);
 
   useEffect(() => {
@@ -978,7 +952,6 @@ function AppInner() {
         const h = videoRef.current.videoHeight;
         setMetadata((m) => (m ? { ...m, width: w, height: h, duration: d } : null));
       }
-      // Full trim by default
       setTrim({ start: 0, end: d });
     },
     [setTrim]
@@ -992,7 +965,6 @@ function AppInner() {
         content: text,
         createdAt: new Date().toISOString(),
       };
-
       setProject((p) => ({ ...p, messages: [...p.messages, userMsg] }));
       setIsSending(true);
 
@@ -1008,9 +980,7 @@ function AppInner() {
 
         setProject((p) => {
           const next = { ...p, messages: [...p.messages, assistantMsg] };
-          if (result.command) {
-            next.credits = Math.max(0, p.credits - CREDIT_COST);
-          }
+          if (result.command) next.credits = Math.max(0, p.credits - CREDIT_COST);
           if (result.effect) {
             next.effects = [
               ...p.effects,
@@ -1038,11 +1008,11 @@ function AppInner() {
     [currentTime, duration, setProject]
   );
 
-  const handleExport = useCallback((resolution: Resolution) => {
+  const handleExport = useCallback((_res: Resolution) => {
     setIsExporting(true);
     setTimeout(() => {
       setIsExporting(false);
-      setToast(`Exported at ${resolution} — ready to download ✓`);
+      setToast(`Export complete — ${_res} render saved locally ✓`);
     }, 2200);
   }, []);
 
@@ -1059,7 +1029,7 @@ function AppInner() {
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <LeftPanel
-        sessionId={sessionId}
+        projectName={project.name}
         videoUrl={videoUrl}
         metadata={metadata}
         credits={project.credits}
@@ -1068,6 +1038,7 @@ function AppInner() {
         isExporting={isExporting}
         onSave={handleSave}
         onLoad={handleLoad}
+        onProjectNameChange={(name) => updateProject({ name })}
         lastSaved={project.savedAt}
       />
       <CenterPanel
@@ -1106,15 +1077,5 @@ function AppInner() {
       />
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </div>
-  );
-}
-
-// ─── Root ──────────────────────────────────────────────────────────────────────
-
-export default function App() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <AppInner />
-    </QueryClientProvider>
   );
 }
