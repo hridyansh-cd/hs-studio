@@ -912,6 +912,7 @@ export default function App() {
   } = useProject();
 
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -930,6 +931,7 @@ export default function App() {
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       const url = URL.createObjectURL(file);
       setVideoUrl(url);
+      setVideoFile(file);
       setCurrentTime(0);
       setDuration(0);
       setMetadata({
@@ -958,7 +960,7 @@ export default function App() {
   );
 
   const handleSend = useCallback(
-    (text: string) => {
+    async (text: string) => {
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "user",
@@ -968,8 +970,77 @@ export default function App() {
       setProject((p) => ({ ...p, messages: [...p.messages, userMsg] }));
       setIsSending(true);
 
+      const result = processCommand(text, currentTime, duration);
+
+      // Real transcription via Whisper — only when video file is loaded
+      if (result.command === "subtitle" && videoFile) {
+        const pendingId = crypto.randomUUID();
+        const pendingMsg: ChatMessage = {
+          id: pendingId,
+          role: "assistant",
+          content: "Transcribing audio… this may take a moment.",
+          command: "subtitle",
+          createdAt: new Date().toISOString(),
+        };
+        setProject((p) => ({ ...p, messages: [...p.messages, pendingMsg] }));
+
+        try {
+          const form = new FormData();
+          form.append("video", videoFile);
+          const resp = await fetch("/api/editor/transcribe", {
+            method: "POST",
+            body: form,
+          });
+          if (!resp.ok) {
+            const errBody = (await resp.json()) as { error: string };
+            throw new Error(errBody.error ?? "Transcription failed");
+          }
+          const data = (await resp.json()) as {
+            subtitles: Array<{ id: string; text: string; start: number; end: number }>;
+          };
+
+          const doneMsg: ChatMessage = {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `Transcription complete — ${data.subtitles.length} subtitle${data.subtitles.length !== 1 ? "s" : ""} generated. Edit them in the Subtitles tab.`,
+            command: "subtitle",
+            createdAt: new Date().toISOString(),
+          };
+          setProject((p) => ({
+            ...p,
+            messages: [...p.messages.filter((m) => m.id !== pendingId), doneMsg],
+            subtitles: [
+              ...p.subtitles,
+              ...data.subtitles.map((s) => ({ ...s, id: crypto.randomUUID() })),
+            ],
+            credits: Math.max(0, p.credits - CREDIT_COST),
+          }));
+        } catch (err: unknown) {
+          const errMsg: ChatMessage = {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `Transcription failed: ${err instanceof Error ? err.message : "Unknown error"}. Using mock subtitles instead.`,
+            command: "subtitle",
+            createdAt: new Date().toISOString(),
+          };
+          const mockSubs = result.subtitles?.map((s) => ({
+            ...s,
+            id: crypto.randomUUID(),
+          })) ?? [];
+          setProject((p) => ({
+            ...p,
+            messages: [...p.messages.filter((m) => m.id !== pendingId), errMsg],
+            subtitles: [...p.subtitles, ...mockSubs],
+            credits: Math.max(0, p.credits - CREDIT_COST),
+          }));
+        } finally {
+          setIsSending(false);
+        }
+        return;
+      }
+
+      // All other commands — client-side logic with a short artificial delay
       setTimeout(() => {
-        const result = processCommand(text, currentTime, duration);
         const assistantMsg: ChatMessage = {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -977,23 +1048,16 @@ export default function App() {
           command: result.command ?? undefined,
           createdAt: new Date().toISOString(),
         };
-
         setProject((p) => {
           const next = { ...p, messages: [...p.messages, assistantMsg] };
           if (result.command) next.credits = Math.max(0, p.credits - CREDIT_COST);
           if (result.effect) {
-            next.effects = [
-              ...p.effects,
-              { ...result.effect, id: crypto.randomUUID() },
-            ];
+            next.effects = [...p.effects, { ...result.effect, id: crypto.randomUUID() }];
           }
           if (result.subtitles) {
             next.subtitles = [
               ...p.subtitles,
-              ...result.subtitles.map((s) => ({
-                ...s,
-                id: crypto.randomUUID(),
-              })),
+              ...result.subtitles.map((s) => ({ ...s, id: crypto.randomUUID() })),
             ];
           }
           if (result.trimMarker !== undefined && duration) {
@@ -1001,11 +1065,10 @@ export default function App() {
           }
           return next;
         });
-
         setIsSending(false);
       }, 700 + Math.random() * 300);
     },
-    [currentTime, duration, setProject]
+    [currentTime, duration, setProject, videoFile]
   );
 
   const handleExport = useCallback((_res: Resolution) => {

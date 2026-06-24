@@ -26,6 +26,50 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /editor/transcribe:
+    post:
+      operationId: transcribeVideo
+      tags: [editor]
+      summary: Transcribe video audio using OpenAI Whisper
+      description: Accepts a video file (max 25 MB), extracts audio, and returns timestamped subtitle segments via the Whisper API. The API key is read server-side only.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                video:
+                  type: string
+                  format: binary
+                  description: The video file to transcribe (MP4, WebM, MOV — max 25 MB)
+              required:
+                - video
+      responses:
+        "200":
+          description: Transcription successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranscribeResponse"
+        "400":
+          description: No file provided
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: OpenAI API key not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          description: Transcription failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /editor/sessions:
     get:
       operationId: listSessions
@@ -373,6 +417,29 @@ components:
         - message
         - assistantMessage
         - creditsRemaining
+    TranscribeResponse:
+      type: object
+      properties:
+        subtitles:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+              start:
+                type: number
+              end:
+                type: number
+            required:
+              - id
+              - text
+              - start
+              - end
+      required:
+        - subtitles
     ApiError:
       type: object
       properties:
