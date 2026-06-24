@@ -25,6 +25,8 @@ import {
   ChevronDown,
   Pencil,
   Check,
+  Plus,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -268,6 +270,7 @@ function LeftPanel({
                     ).padStart(2, "0")}`,
                   ],
                   ["Resolution", `${metadata.width}×${metadata.height}`],
+                  ["Frame Rate", metadata.frameRate ? `${metadata.frameRate} fps` : "—"],
                   ["Aspect", formatAspect(metadata.width, metadata.height)],
                   ["Size", formatBytes(metadata.sizeBytes)],
                   [
@@ -596,74 +599,160 @@ function CenterPanel({
 
 // ─── Subtitle editor row ───────────────────────────────────────────────────────
 
+function parseTimeInput(val: string): number | null {
+  const trimmed = val.trim();
+  // Accept formats: "1:23", "1:23.4", "83", "83.4"
+  const colonMatch = trimmed.match(/^(\d+):(\d{1,2})(\.\d+)?$/);
+  if (colonMatch) {
+    const m = parseInt(colonMatch[1], 10);
+    const s = parseFloat(colonMatch[2] + (colonMatch[3] ?? ""));
+    return m * 60 + s;
+  }
+  const plain = parseFloat(trimmed);
+  if (!isNaN(plain) && plain >= 0) return plain;
+  return null;
+}
+
+function fmtTime(t: number): string {
+  const m = Math.floor(t / 60);
+  const s = (t % 60).toFixed(1);
+  return `${m}:${s.padStart(4, "0")}`;
+}
+
 const SubtitleRow = memo(
   ({
     sub,
     onUpdate,
     onDelete,
+    onSeek,
   }: {
     sub: Subtitle;
     onUpdate: (s: Subtitle) => void;
     onDelete: (id: string) => void;
+    onSeek?: (t: number) => void;
   }) => {
-    const [editing, setEditing] = useState(false);
+    const [mode, setMode] = useState<"view" | "editText" | "editTime">("view");
     const [text, setText] = useState(sub.text);
+    const [startVal, setStartVal] = useState(fmtTime(sub.start));
+    const [endVal, setEndVal] = useState(fmtTime(sub.end));
 
-    const commit = () => {
+    const commitText = () => {
       onUpdate({ ...sub, text: text.trim() || sub.text });
-      setEditing(false);
+      setMode("view");
+    };
+
+    const commitTime = () => {
+      const s = parseTimeInput(startVal);
+      const e = parseTimeInput(endVal);
+      if (s !== null && e !== null && e > s) {
+        onUpdate({ ...sub, start: s, end: e });
+      } else {
+        setStartVal(fmtTime(sub.start));
+        setEndVal(fmtTime(sub.end));
+      }
+      setMode("view");
     };
 
     return (
-      <div className="group flex items-start gap-2 p-2 rounded-lg hover:bg-muted/20 transition-colors">
-        <div className="text-[9px] font-mono text-muted-foreground/60 shrink-0 mt-1 w-10 text-right">
-          {Math.floor(sub.start / 60)}:
-          {String(Math.floor(sub.start % 60)).padStart(2, "0")}
+      <div className="group flex flex-col gap-1 p-2 rounded-lg hover:bg-muted/20 transition-colors">
+        {/* Time stamp row */}
+        <div className="flex items-center gap-1">
+          {mode === "editTime" ? (
+            <div className="flex items-center gap-1 flex-1">
+              <input
+                autoFocus
+                value={startVal}
+                onChange={(e) => setStartVal(e.target.value)}
+                onBlur={commitTime}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitTime();
+                  if (e.key === "Escape") { setStartVal(fmtTime(sub.start)); setEndVal(fmtTime(sub.end)); setMode("view"); }
+                  if (e.key === "Tab") { e.preventDefault(); (e.currentTarget.nextElementSibling?.nextElementSibling as HTMLInputElement)?.focus(); }
+                }}
+                className="w-16 bg-background border border-primary/40 rounded px-1.5 py-0.5 text-[10px] font-mono text-foreground outline-none"
+                title="Start time (m:ss)"
+              />
+              <span className="text-[9px] text-muted-foreground/50">→</span>
+              <input
+                value={endVal}
+                onChange={(e) => setEndVal(e.target.value)}
+                onBlur={commitTime}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitTime();
+                  if (e.key === "Escape") { setStartVal(fmtTime(sub.start)); setEndVal(fmtTime(sub.end)); setMode("view"); }
+                }}
+                className="w-16 bg-background border border-primary/40 rounded px-1.5 py-0.5 text-[10px] font-mono text-foreground outline-none"
+                title="End time (m:ss)"
+              />
+              <button onClick={commitTime} className="text-emerald-400 hover:text-emerald-300 p-0.5 ml-1">
+                <Check className="w-3 h-3" />
+              </button>
+            </div>
+          ) : (
+            <button
+              className="text-[9px] font-mono text-muted-foreground/60 hover:text-primary/70 transition-colors flex items-center gap-0.5"
+              onClick={() => { setStartVal(fmtTime(sub.start)); setEndVal(fmtTime(sub.end)); setMode("editTime"); }}
+              title="Edit timing"
+            >
+              <Clock className="w-2.5 h-2.5" />
+              {fmtTime(sub.start)}–{fmtTime(sub.end)}
+            </button>
+          )}
+          <div className="flex-1" />
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            {mode === "editText" ? (
+              <button onClick={commitText} className="text-emerald-400 hover:text-emerald-300 p-0.5">
+                <Check className="w-3 h-3" />
+              </button>
+            ) : (
+              <button
+                onClick={() => { setText(sub.text); setMode("editText"); }}
+                className="text-muted-foreground hover:text-foreground p-0.5"
+                title="Edit text"
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            )}
+            <button
+              onClick={() => onSeek?.(sub.start)}
+              className="text-muted-foreground hover:text-primary p-0.5"
+              title="Seek to subtitle"
+            >
+              <Play className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => onDelete(sub.id)}
+              className="text-muted-foreground hover:text-red-400 p-0.5"
+              title="Delete subtitle"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
         </div>
-        <div className="flex-1 min-w-0">
-          {editing ? (
-            <input
+        {/* Text row */}
+        <div className="pl-0.5">
+          {mode === "editText" ? (
+            <textarea
               autoFocus
               value={text}
+              rows={2}
               onChange={(e) => setText(e.target.value)}
-              onBlur={commit}
+              onBlur={commitText}
               onKeyDown={(e) => {
-                if (e.key === "Enter") commit();
-                if (e.key === "Escape") {
-                  setText(sub.text);
-                  setEditing(false);
-                }
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commitText(); }
+                if (e.key === "Escape") { setText(sub.text); setMode("view"); }
               }}
-              className="w-full bg-background border border-primary/40 rounded px-2 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary/40"
+              className="w-full bg-background border border-primary/40 rounded px-2 py-1 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary/40 resize-none"
             />
           ) : (
-            <p className="text-xs text-foreground/90 leading-relaxed break-words">
+            <p
+              className="text-xs text-foreground/90 leading-relaxed break-words cursor-text"
+              onDoubleClick={() => { setText(sub.text); setMode("editText"); }}
+              title="Double-click to edit"
+            >
               {sub.text}
             </p>
           )}
-        </div>
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          {editing ? (
-            <button
-              onClick={commit}
-              className="text-emerald-400 hover:text-emerald-300 p-0.5"
-            >
-              <Check className="w-3 h-3" />
-            </button>
-          ) : (
-            <button
-              onClick={() => setEditing(true)}
-              className="text-muted-foreground hover:text-foreground p-0.5"
-            >
-              <Pencil className="w-3 h-3" />
-            </button>
-          )}
-          <button
-            onClick={() => onDelete(sub.id)}
-            className="text-muted-foreground hover:text-red-400 p-0.5"
-          >
-            <X className="w-3 h-3" />
-          </button>
         </div>
       </div>
     );
@@ -677,17 +766,25 @@ function RightPanel({
   messages,
   isSending,
   subtitles,
+  currentTime,
+  duration,
   onSend,
   onSubtitleUpdate,
   onSubtitleDelete,
+  onSubtitleAdd,
+  onSeek,
 }: {
   credits: number;
   messages: ChatMessage[];
   isSending: boolean;
   subtitles: Subtitle[];
+  currentTime: number;
+  duration: number;
   onSend: (text: string) => void;
   onSubtitleUpdate: (s: Subtitle) => void;
   onSubtitleDelete: (id: string) => void;
+  onSubtitleAdd: (sub: Omit<Subtitle, "id">) => void;
+  onSeek: (t: number) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState("");
@@ -865,27 +962,44 @@ function RightPanel({
         </>
       ) : (
         /* Subtitle Editor Tab */
-        <div className="flex-1 overflow-y-auto">
-          {subtitles.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 py-10 text-center px-4">
-              <Type className="w-8 h-8 text-muted-foreground/30" />
-              <p className="text-xs text-muted-foreground/60">
-                No subtitles yet. Use the <strong>subtitle</strong> command in
-                chat to generate them.
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border/30">
-              {subtitles.map((sub) => (
-                <SubtitleRow
-                  key={sub.id}
-                  sub={sub}
-                  onUpdate={onSubtitleUpdate}
-                  onDelete={onSubtitleDelete}
-                />
-              ))}
-            </div>
-          )}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto">
+            {subtitles.length === 0 ? (
+              <div className="flex flex-col items-center gap-3 py-10 text-center px-4">
+                <Type className="w-8 h-8 text-muted-foreground/30" />
+                <p className="text-xs text-muted-foreground/60">
+                  No subtitles yet. Use the <strong>subtitle</strong> command in
+                  chat to generate them, or add one manually below.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border/30">
+                {subtitles.map((sub) => (
+                  <SubtitleRow
+                    key={sub.id}
+                    sub={sub}
+                    onUpdate={onSubtitleUpdate}
+                    onDelete={onSubtitleDelete}
+                    onSeek={onSeek}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+          {/* Add subtitle button */}
+          <div className="p-2 border-t border-border/40 shrink-0">
+            <button
+              onClick={() => {
+                const start = Math.max(0, currentTime);
+                const end = Math.min(start + 3, duration || start + 3);
+                onSubtitleAdd({ text: "New subtitle", start, end });
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-dashed border-border/60 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/40 hover:bg-primary/5 transition-all"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add subtitle at {(() => { const m = Math.floor(currentTime/60); const s = Math.floor(currentTime%60); return `${m}:${s.toString().padStart(2,"0")}`; })()}
+            </button>
+          </div>
         </div>
       )}
     </aside>
@@ -971,6 +1085,20 @@ export default function App() {
       setIsSending(true);
 
       const result = processCommand(text, currentTime, duration);
+
+      // Subtitle command with no video — guide the user
+      if (result.command === "subtitle" && !videoFile) {
+        const noVideoMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "Please upload a video first — subtitles are generated from the video's audio using Whisper speech recognition.",
+          command: "subtitle",
+          createdAt: new Date().toISOString(),
+        };
+        setProject((p) => ({ ...p, messages: [...p.messages, noVideoMsg] }));
+        setIsSending(false);
+        return;
+      }
 
       // Real transcription via Whisper — only when video file is loaded
       if (result.command === "subtitle" && videoFile) {
@@ -1134,9 +1262,21 @@ export default function App() {
         messages={project.messages}
         isSending={isSending}
         subtitles={project.subtitles}
+        currentTime={currentTime}
+        duration={duration}
         onSend={handleSend}
         onSubtitleUpdate={updateSubtitle}
         onSubtitleDelete={deleteSubtitle}
+        onSubtitleAdd={(sub) => {
+          setProject((p) => ({
+            ...p,
+            subtitles: [...p.subtitles, { ...sub, id: crypto.randomUUID() }],
+          }));
+        }}
+        onSeek={(t) => {
+          setCurrentTime(t);
+          if (videoRef.current) videoRef.current.currentTime = t;
+        }}
       />
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </div>

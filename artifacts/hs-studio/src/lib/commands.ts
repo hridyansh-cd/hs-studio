@@ -48,18 +48,9 @@ export function processCommand(
       };
 
     case "subtitle": {
-      const segDuration = Math.min(3, duration / 4 || 3);
-      const start1 = Math.max(0, currentTime);
-      const end1 = Math.min(duration || 999, start1 + segDuration);
-      const start2 = end1;
-      const end2 = Math.min(duration || 999, start2 + segDuration);
       return {
-        message: `Subtitle segments created at ${fmt(start1)}–${fmt(end1)} and ${fmt(start2)}–${fmt(end2)}. Click the Subtitles tab in the chat panel to edit the text. Speech-to-text transcription coming in Phase 2.`,
+        message: `Please upload a video first — subtitles are generated from the video's audio using speech recognition (Whisper). Once a video is loaded, type "subtitle" again to start transcription.`,
         command: "subtitle",
-        subtitles: [
-          { text: "Edit this subtitle", start: start1, end: end1 },
-          { text: "Add your caption here", start: start2, end: end2 },
-        ],
       };
     }
 
