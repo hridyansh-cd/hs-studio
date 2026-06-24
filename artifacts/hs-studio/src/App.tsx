@@ -3,7 +3,6 @@ import {
   useRef,
   useEffect,
   useCallback,
-  useMemo,
   memo,
 } from "react";
 import {
@@ -28,15 +27,20 @@ import {
   Check,
 } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useListSessions, useCreateSession, useGetSession, getGetSessionQueryKey } from "@workspace/api-client-react";
+import {
+  useListSessions,
+  useCreateSession,
+  useGetSession,
+  getGetSessionQueryKey,
+} from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { Timeline } from "@/components/Timeline";
 import { processCommand, COMMAND_COLORS } from "@/lib/commands";
-import { saveProject, loadProject, DEFAULT_PROJECT } from "@/lib/project";
+import { useProject } from "@/hooks/useProject";
+import { useEffectPreview } from "@/hooks/useEffectPreview";
 import type {
-  Project,
   Subtitle,
   Effect,
   TrimState,
@@ -72,26 +76,33 @@ function useActiveSession() {
 
 // ─── Toast ─────────────────────────────────────────────────────────────────────
 
-const Toast = memo(({ message, onDone }: { message: string; onDone: () => void }) => {
-  useEffect(() => {
-    const t = setTimeout(onDone, 3200);
-    return () => clearTimeout(t);
-  }, [onDone]);
-  return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-card border border-border shadow-2xl rounded-xl px-5 py-3 text-sm font-medium">
-      <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-      <span>{message}</span>
-    </div>
-  );
-});
+const Toast = memo(
+  ({ message, onDone }: { message: string; onDone: () => void }) => {
+    useEffect(() => {
+      const t = setTimeout(onDone, 3200);
+      return () => clearTimeout(t);
+    }, [onDone]);
+    return (
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-card border border-border shadow-2xl rounded-xl px-5 py-3 text-sm font-medium animate-in fade-in slide-in-from-bottom-2">
+        <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+        <span>{message}</span>
+      </div>
+    );
+  }
+);
 
 // ─── Subtitle overlay ──────────────────────────────────────────────────────────
 
 const SubtitleOverlay = memo(
-  ({ subtitles, currentTime }: { subtitles: Subtitle[]; currentTime: number }) => {
-    const active = useMemo(
-      () => subtitles.find((s) => currentTime >= s.start && currentTime <= s.end),
-      [subtitles, currentTime]
+  ({
+    subtitles,
+    currentTime,
+  }: {
+    subtitles: Subtitle[];
+    currentTime: number;
+  }) => {
+    const active = subtitles.find(
+      (s) => currentTime >= s.start && currentTime <= s.end
     );
     if (!active) return null;
     return (
@@ -130,7 +141,10 @@ function LeftPanel({
   lastSaved: number;
 }) {
   const { data: session } = useGetSession(sessionId || 0, {
-    query: { enabled: !!sessionId, queryKey: getGetSessionQueryKey(sessionId || 0) },
+    query: {
+      enabled: !!sessionId,
+      queryKey: getGetSessionQueryKey(sessionId || 0),
+    },
   });
   const [resolution, setResolution] = useState<Resolution>("1080p");
   const [showResMenu, setShowResMenu] = useState(false);
@@ -142,20 +156,24 @@ function LeftPanel({
     if (file?.type.startsWith("video/")) onFileSelect(file);
   };
 
-  const formatBytes = (b: number) => {
-    if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
-    return `${(b / 1024 / 1024).toFixed(1)} MB`;
-  };
+  const formatBytes = (b: number) =>
+    b < 1024 * 1024
+      ? `${(b / 1024).toFixed(0)} KB`
+      : `${(b / 1024 / 1024).toFixed(1)} MB`;
 
   const formatAspect = (w: number, h: number) => {
-    const g = (a: number, b: number): number => (b === 0 ? a : g(b, a % b));
-    const d = g(w, h);
-    return `${w / d}:${h / d}`;
+    const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+    const d = gcd(w, h);
+    return w && h ? `${w / d}:${h / d}` : "—";
   };
 
-  const pct = (credits / 50) * 100;
+  const pct = Math.min(100, (credits / 50) * 100);
   const barCls =
-    credits <= 5 ? "bg-red-500" : credits <= 20 ? "bg-yellow-500" : "bg-primary";
+    credits <= 5
+      ? "bg-red-500"
+      : credits <= 20
+      ? "bg-yellow-500"
+      : "bg-primary";
   const crCls =
     credits <= 5
       ? "bg-red-500/10 text-red-400"
@@ -176,7 +194,9 @@ function LeftPanel({
       <div className="flex-1 flex flex-col gap-4 p-4 overflow-y-auto">
         {/* Upload */}
         <section className="space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Upload Video</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+            Upload Video
+          </p>
           <div
             className={cn(
               "border-2 border-dashed rounded-xl p-4 flex flex-col items-center gap-2.5 cursor-pointer transition-all text-center",
@@ -187,7 +207,6 @@ function LeftPanel({
             onDrop={handleDrop}
             onDragOver={(e) => e.preventDefault()}
             onClick={() => fileRef.current?.click()}
-            data-testid="upload-zone"
           >
             <input
               ref={fileRef}
@@ -198,17 +217,30 @@ function LeftPanel({
                 const f = e.target.files?.[0];
                 if (f?.type.startsWith("video/")) onFileSelect(f);
               }}
-              data-testid="input-video-upload"
             />
-            <div className={cn("w-9 h-9 rounded-full flex items-center justify-center", videoUrl ? "bg-primary/20" : "bg-muted/40")}>
-              <UploadCloud className={cn("w-4.5 h-4.5", videoUrl ? "text-primary" : "text-muted-foreground")} />
+            <div
+              className={cn(
+                "w-9 h-9 rounded-full flex items-center justify-center",
+                videoUrl ? "bg-primary/20" : "bg-muted/40"
+              )}
+            >
+              <UploadCloud
+                className={cn(
+                  "w-4.5 h-4.5",
+                  videoUrl ? "text-primary" : "text-muted-foreground"
+                )}
+              />
             </div>
             {videoUrl ? (
-              <p className="text-xs font-semibold text-primary">Video loaded ✓</p>
+              <p className="text-xs font-semibold text-primary">
+                Video loaded ✓
+              </p>
             ) : (
               <>
                 <p className="text-xs font-semibold">Drag & drop or click</p>
-                <p className="text-[10px] text-muted-foreground">MP4 · WebM · MOV</p>
+                <p className="text-[10px] text-muted-foreground">
+                  MP4 · WebM · MOV
+                </p>
               </>
             )}
           </div>
@@ -217,19 +249,38 @@ function LeftPanel({
         {/* Video metadata */}
         {metadata && (
           <section className="space-y-1.5">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Video Info</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+              Video Info
+            </p>
             <div className="bg-muted/20 rounded-lg p-3 space-y-1.5 text-[11px]">
-              {[
-                ["Name", metadata.name.length > 22 ? metadata.name.slice(0, 20) + "…" : metadata.name],
-                ["Duration", `${Math.floor(metadata.duration / 60)}:${String(Math.floor(metadata.duration % 60)).padStart(2, "0")}`],
-                ["Resolution", `${metadata.width}×${metadata.height}`],
-                ["Aspect", formatAspect(metadata.width, metadata.height)],
-                ["Size", formatBytes(metadata.sizeBytes)],
-                ["Format", metadata.type.replace("video/", "").toUpperCase()],
-              ].map(([k, v]) => (
+              {(
+                [
+                  [
+                    "Name",
+                    metadata.name.length > 22
+                      ? metadata.name.slice(0, 20) + "…"
+                      : metadata.name,
+                  ],
+                  [
+                    "Duration",
+                    `${Math.floor(metadata.duration / 60)}:${String(
+                      Math.floor(metadata.duration % 60)
+                    ).padStart(2, "0")}`,
+                  ],
+                  ["Resolution", `${metadata.width}×${metadata.height}`],
+                  ["Aspect", formatAspect(metadata.width, metadata.height)],
+                  ["Size", formatBytes(metadata.sizeBytes)],
+                  [
+                    "Format",
+                    metadata.type.replace("video/", "").toUpperCase() || "—",
+                  ],
+                ] as [string, string][]
+              ).map(([k, v]) => (
                 <div key={k} className="flex justify-between gap-2">
                   <span className="text-muted-foreground">{k}</span>
-                  <span className="font-mono text-foreground/90 text-right truncate">{v}</span>
+                  <span className="font-mono text-foreground/90 text-right truncate">
+                    {v}
+                  </span>
                 </div>
               ))}
             </div>
@@ -238,22 +289,35 @@ function LeftPanel({
 
         {/* Export */}
         <section className="space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Export</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+            Export
+          </p>
           <div className="relative">
             <button
               className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-background border border-border text-xs font-medium hover:border-primary/30 transition-colors"
               onClick={() => setShowResMenu((v) => !v)}
             >
               <span>{resolution}</span>
-              <ChevronDown className={cn("w-3.5 h-3.5 text-muted-foreground transition-transform", showResMenu && "rotate-180")} />
+              <ChevronDown
+                className={cn(
+                  "w-3.5 h-3.5 text-muted-foreground transition-transform",
+                  showResMenu && "rotate-180"
+                )}
+              />
             </button>
             {showResMenu && (
               <div className="absolute top-full mt-1 inset-x-0 bg-card border border-border rounded-lg shadow-xl z-20 overflow-hidden">
                 {EXPORT_RESOLUTIONS.map((r) => (
                   <button
                     key={r}
-                    className={cn("w-full px-3 py-2 text-xs text-left hover:bg-muted/40 transition-colors", r === resolution && "text-primary font-semibold bg-primary/5")}
-                    onClick={() => { setResolution(r); setShowResMenu(false); }}
+                    className={cn(
+                      "w-full px-3 py-2 text-xs text-left hover:bg-muted/40 transition-colors",
+                      r === resolution && "text-primary font-semibold bg-primary/5"
+                    )}
+                    onClick={() => {
+                      setResolution(r);
+                      setShowResMenu(false);
+                    }}
                   >
                     {r}
                   </button>
@@ -267,21 +331,38 @@ function LeftPanel({
             onClick={() => onExport(resolution)}
           >
             {isExporting ? (
-              <><div className="w-3 h-3 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" /> Exporting…</>
+              <>
+                <div className="w-3 h-3 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
+                Exporting…
+              </>
             ) : (
-              <><Download className="w-3.5 h-3.5" /> Export {resolution}</>
+              <>
+                <Download className="w-3.5 h-3.5" /> Export {resolution}
+              </>
             )}
           </Button>
         </section>
 
         {/* Project */}
         <section className="space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Project</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+            Project
+          </p>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="flex-1 text-xs gap-1.5 h-8" onClick={onSave}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 text-xs gap-1.5 h-8"
+              onClick={onSave}
+            >
               <Save className="w-3.5 h-3.5" /> Save
             </Button>
-            <Button variant="outline" size="sm" className="flex-1 text-xs gap-1.5 h-8" onClick={onLoad}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 text-xs gap-1.5 h-8"
+              onClick={onLoad}
+            >
               <FolderOpen className="w-3.5 h-3.5" /> Load
             </Button>
           </div>
@@ -298,8 +379,15 @@ function LeftPanel({
         <div className="p-3 border-t border-border">
           <div className="bg-muted/20 rounded-xl p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] text-muted-foreground truncate">{session.name}</span>
-              <span className={cn("text-[10px] font-mono font-bold px-2 py-0.5 rounded-md", crCls)}>
+              <span className="text-[11px] text-muted-foreground truncate">
+                {session.name}
+              </span>
+              <span
+                className={cn(
+                  "text-[10px] font-mono font-bold px-2 py-0.5 rounded-md",
+                  crCls
+                )}
+              >
                 {credits} CR
               </span>
             </div>
@@ -310,7 +398,10 @@ function LeftPanel({
               </div>
               <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                 <div
-                  className={cn("h-full rounded-full transition-all duration-500", barCls)}
+                  className={cn(
+                    "h-full rounded-full transition-all duration-500",
+                    barCls
+                  )}
                   style={{ width: `${pct}%` }}
                 />
               </div>
@@ -332,11 +423,13 @@ function CenterPanel({
   effects,
   trim,
   zoom,
+  effectPreviewStyle,
   onTimeUpdate,
   onDurationLoad,
   onSeek,
   onTrimChange,
   onEffectDelete,
+  onEffectUpdate,
   onSubtitleClick,
   onZoomChange,
   videoRef,
@@ -348,11 +441,13 @@ function CenterPanel({
   effects: Effect[];
   trim: TrimState;
   zoom: number;
+  effectPreviewStyle: { transform: string; opacity: number };
   onTimeUpdate: (t: number) => void;
   onDurationLoad: (d: number) => void;
   onSeek: (t: number) => void;
   onTrimChange: (t: TrimState) => void;
   onEffectDelete: (id: string) => void;
+  onEffectUpdate: (effect: Effect) => void;
   onSubtitleClick: (s: Subtitle) => void;
   onZoomChange: (z: number) => void;
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -362,9 +457,12 @@ function CenterPanel({
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (isPlaying) v.pause();
-    else v.play();
-    setIsPlaying((p) => !p);
+    if (isPlaying) {
+      v.pause();
+      setIsPlaying(false);
+    } else {
+      v.play().then(() => setIsPlaying(true)).catch(() => {});
+    }
   }, [isPlaying, videoRef]);
 
   const seek = useCallback(
@@ -387,25 +485,42 @@ function CenterPanel({
       {/* Video area */}
       <div className="flex-1 flex items-center justify-center relative overflow-hidden bg-black/20">
         {videoUrl ? (
-          <>
+          /* Effect preview wrapper */
+          <div
+            className="relative max-w-full max-h-full"
+            style={{
+              transform: effectPreviewStyle.transform,
+              opacity: effectPreviewStyle.opacity,
+              transition: "transform 0.06s linear, opacity 0.06s linear",
+              willChange: "transform, opacity",
+            }}
+          >
             <video
               ref={videoRef as React.RefObject<HTMLVideoElement>}
               src={videoUrl}
-              className="max-w-full max-h-full object-contain rounded shadow-2xl"
-              onTimeUpdate={() => { if (videoRef.current) onTimeUpdate(videoRef.current.currentTime); }}
-              onLoadedMetadata={() => { if (videoRef.current) onDurationLoad(videoRef.current.duration); }}
+              className="max-w-full max-h-full object-contain rounded shadow-2xl block"
+              style={{ maxHeight: "calc(100vh - 280px)" }}
+              onTimeUpdate={() => {
+                if (videoRef.current)
+                  onTimeUpdate(videoRef.current.currentTime);
+              }}
+              onLoadedMetadata={() => {
+                if (videoRef.current)
+                  onDurationLoad(videoRef.current.duration);
+              }}
               onEnded={() => setIsPlaying(false)}
               onClick={togglePlay}
-              data-testid="video-player"
             />
             <SubtitleOverlay subtitles={subtitles} currentTime={currentTime} />
-          </>
+          </div>
         ) : (
           <div className="flex flex-col items-center gap-4 text-muted-foreground select-none">
             <div className="w-20 h-20 rounded-2xl bg-muted/20 border border-border/40 flex items-center justify-center">
               <Video className="w-9 h-9 opacity-30" />
             </div>
-            <p className="text-sm font-medium opacity-60">Drop a video to begin editing</p>
+            <p className="text-sm font-medium opacity-60">
+              Drop a video to begin editing
+            </p>
           </div>
         )}
       </div>
@@ -429,9 +544,12 @@ function CenterPanel({
               ? "bg-primary hover:bg-primary/90 text-primary-foreground"
               : "bg-muted/30 text-muted-foreground cursor-not-allowed"
           )}
-          data-testid="button-play-pause"
         >
-          {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 translate-x-px" />}
+          {isPlaying ? (
+            <Pause className="w-4 h-4" />
+          ) : (
+            <Play className="w-4 h-4 translate-x-px" />
+          )}
         </button>
         <button
           onClick={() => seek(currentTime + 5)}
@@ -443,11 +561,13 @@ function CenterPanel({
         </button>
 
         {/* Scrubber */}
-        <div className="relative flex-1 h-4 flex items-center group">
+        <div className="relative flex-1 h-4 flex items-center">
           <div className="absolute inset-x-0 h-1.5 bg-muted/40 rounded-full overflow-hidden">
             <div
               className="h-full bg-primary/50 rounded-full"
-              style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+              style={{
+                width: `${duration ? (currentTime / duration) * 100 : 0}%`,
+              }}
             />
           </div>
           <input
@@ -459,7 +579,6 @@ function CenterPanel({
             onChange={(e) => seek(parseFloat(e.target.value))}
             disabled={!videoUrl}
             className="absolute inset-0 w-full opacity-0 cursor-pointer z-10"
-            data-testid="input-timeline-seek"
           />
         </div>
 
@@ -479,6 +598,7 @@ function CenterPanel({
         onSeek={seek}
         onTrimChange={onTrimChange}
         onEffectDelete={onEffectDelete}
+        onEffectUpdate={onEffectUpdate}
         onSubtitleClick={onSubtitleClick}
         onZoomChange={onZoomChange}
       />
@@ -509,7 +629,8 @@ const SubtitleRow = memo(
     return (
       <div className="group flex items-start gap-2 p-2 rounded-lg hover:bg-muted/20 transition-colors">
         <div className="text-[9px] font-mono text-muted-foreground/60 shrink-0 mt-1 w-10 text-right">
-          {Math.floor(sub.start / 60)}:{String(Math.floor(sub.start % 60)).padStart(2, "0")}
+          {Math.floor(sub.start / 60)}:
+          {String(Math.floor(sub.start % 60)).padStart(2, "0")}
         </div>
         <div className="flex-1 min-w-0">
           {editing ? (
@@ -518,24 +639,41 @@ const SubtitleRow = memo(
               value={text}
               onChange={(e) => setText(e.target.value)}
               onBlur={commit}
-              onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") { setText(sub.text); setEditing(false); } }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit();
+                if (e.key === "Escape") {
+                  setText(sub.text);
+                  setEditing(false);
+                }
+              }}
               className="w-full bg-background border border-primary/40 rounded px-2 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary/40"
             />
           ) : (
-            <p className="text-xs text-foreground/90 leading-relaxed break-words">{sub.text}</p>
+            <p className="text-xs text-foreground/90 leading-relaxed break-words">
+              {sub.text}
+            </p>
           )}
         </div>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
           {editing ? (
-            <button onClick={commit} className="text-emerald-400 hover:text-emerald-300 p-0.5">
+            <button
+              onClick={commit}
+              className="text-emerald-400 hover:text-emerald-300 p-0.5"
+            >
               <Check className="w-3 h-3" />
             </button>
           ) : (
-            <button onClick={() => setEditing(true)} className="text-muted-foreground hover:text-foreground p-0.5">
+            <button
+              onClick={() => setEditing(true)}
+              className="text-muted-foreground hover:text-foreground p-0.5"
+            >
               <Pencil className="w-3 h-3" />
             </button>
           )}
-          <button onClick={() => onDelete(sub.id)} className="text-muted-foreground hover:text-red-400 p-0.5">
+          <button
+            onClick={() => onDelete(sub.id)}
+            className="text-muted-foreground hover:text-red-400 p-0.5"
+          >
             <X className="w-3 h-3" />
           </button>
         </div>
@@ -548,7 +686,6 @@ const SubtitleRow = memo(
 
 function RightPanel({
   credits,
-  currentTime,
   messages,
   isSending,
   subtitles,
@@ -557,7 +694,6 @@ function RightPanel({
   onSubtitleDelete,
 }: {
   credits: number;
-  currentTime: number;
   messages: ChatMessage[];
   isSending: boolean;
   subtitles: Subtitle[];
@@ -586,7 +722,11 @@ function RightPanel({
   const hints: { cmd: CommandType; icon: React.ReactNode; label: string }[] = [
     { cmd: "cut", icon: <Scissors className="w-3 h-3" />, label: "cut" },
     { cmd: "subtitle", icon: <Type className="w-3 h-3" />, label: "subtitle" },
-    { cmd: "zoom", icon: <ZoomInIcon className="w-3 h-3" />, label: "zoom" },
+    {
+      cmd: "zoom",
+      icon: <ZoomInIcon className="w-3 h-3" />,
+      label: "zoom",
+    },
   ];
 
   return (
@@ -611,7 +751,9 @@ function RightPanel({
                   : "text-muted-foreground hover:text-foreground"
               )}
             >
-              {t === "subtitles" ? `Subtitles (${subtitles.length})` : "Chat"}
+              {t === "subtitles"
+                ? `Subtitles (${subtitles.length})`
+                : "Chat"}
             </button>
           ))}
         </div>
@@ -620,21 +762,30 @@ function RightPanel({
       {tab === "chat" ? (
         <>
           {/* Messages */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
+          <div
+            ref={scrollRef}
+            className="flex-1 overflow-y-auto p-3 space-y-3"
+          >
             {messages.length === 0 && (
               <div className="flex flex-col items-center gap-3 py-8 text-center">
                 <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center">
                   <Sparkles className="w-5 h-5 text-primary/50" />
                 </div>
-                <p className="text-xs text-muted-foreground/70">Ask AI to edit your video</p>
+                <p className="text-xs text-muted-foreground/70">
+                  Ask AI to edit your video
+                </p>
                 <div className="flex flex-wrap gap-1.5 justify-center">
                   {hints.map(({ cmd, icon, label }) => (
                     <button
                       key={cmd}
                       onClick={() => setInput(label)}
-                      className={cn("flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-full border transition-all hover:scale-105", COMMAND_COLORS[cmd])}
+                      className={cn(
+                        "flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-full border transition-all hover:scale-105",
+                        COMMAND_COLORS[cmd]
+                      )}
                     >
-                      {icon}{label}
+                      {icon}
+                      {label}
                     </button>
                   ))}
                 </div>
@@ -651,7 +802,12 @@ function RightPanel({
                 )}
               >
                 {msg.role === "assistant" && msg.command && (
-                  <span className={cn("inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md border mb-1.5 self-start", COMMAND_COLORS[msg.command])}>
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md border mb-1.5 self-start",
+                      COMMAND_COLORS[msg.command]
+                    )}
+                  >
                     {msg.command === "cut" && <Scissors className="w-2.5 h-2.5" />}
                     {msg.command === "subtitle" && <Type className="w-2.5 h-2.5" />}
                     {msg.command === "zoom" && <ZoomInIcon className="w-2.5 h-2.5" />}
@@ -664,7 +820,11 @@ function RightPanel({
             {isSending && (
               <div className="bg-muted/50 border border-border/50 rounded-2xl rounded-bl-sm px-3.5 py-2.5 max-w-[90%] flex items-center gap-1.5">
                 {[0, 0.15, 0.3].map((d, i) => (
-                  <div key={i} className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: `${d}s` }} />
+                  <div
+                    key={i}
+                    className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce"
+                    style={{ animationDelay: `${d}s` }}
+                  />
                 ))}
               </div>
             )}
@@ -676,32 +836,49 @@ function RightPanel({
               <Input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={credits <= 0 ? "No credits remaining" : "Ask AI to edit…"}
+                placeholder={
+                  credits <= 0 ? "No credits remaining" : "Ask AI to edit…"
+                }
                 disabled={isSending || credits <= 0}
                 className="flex-1 h-9 text-xs bg-background/80"
-                data-testid="input-chat-message"
               />
-              <Button type="submit" size="icon" className="h-9 w-9 shrink-0" disabled={!input.trim() || isSending || credits <= 0} data-testid="button-send-chat">
+              <Button
+                type="submit"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                disabled={!input.trim() || isSending || credits <= 0}
+              >
                 <Send className="w-3.5 h-3.5" />
               </Button>
             </form>
             <div className="flex items-center justify-between px-0.5">
               {credits <= 0 ? (
-                <p className="text-[10px] text-red-400 font-medium">Out of credits</p>
+                <p className="text-[10px] text-red-400 font-medium">
+                  Out of credits
+                </p>
               ) : (
                 <div className="flex gap-1 flex-wrap">
                   {hints.map(({ cmd, icon, label }) => (
                     <button
                       key={cmd}
                       onClick={() => setInput(label)}
-                      className={cn("flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full border hover:scale-105 transition-all", COMMAND_COLORS[cmd])}
+                      className={cn(
+                        "flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-full border hover:scale-105 transition-all",
+                        COMMAND_COLORS[cmd]
+                      )}
                     >
-                      {icon}{label}
+                      {icon}
+                      {label}
                     </button>
                   ))}
                 </div>
               )}
-              <span className={cn("text-[10px] font-mono shrink-0 ml-1", credits <= 5 ? "text-red-400" : "text-muted-foreground")}>
+              <span
+                className={cn(
+                  "text-[10px] font-mono shrink-0 ml-1",
+                  credits <= 5 ? "text-red-400" : "text-muted-foreground"
+                )}
+              >
                 {credits} CR
               </span>
             </div>
@@ -713,7 +890,10 @@ function RightPanel({
           {subtitles.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-10 text-center px-4">
               <Type className="w-8 h-8 text-muted-foreground/30" />
-              <p className="text-xs text-muted-foreground/60">No subtitles yet. Use the <strong>subtitle</strong> command in chat to generate them.</p>
+              <p className="text-xs text-muted-foreground/60">
+                No subtitles yet. Use the{" "}
+                <strong>subtitle</strong> command in chat to generate them.
+              </p>
             </div>
           ) : (
             <div className="divide-y divide-border/30">
@@ -739,26 +919,36 @@ function AppInner() {
   const sessionId = useActiveSession();
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Load project from localStorage on mount
-  const [project, setProject] = useState<Project>(() => loadProject() ?? DEFAULT_PROJECT);
+  // ── Project state (with autosave) ──────────────────────────────────────
+  const {
+    project,
+    setProject,
+    updateEffect,
+    deleteEffect,
+    updateSubtitle,
+    deleteSubtitle,
+    setTrim,
+    setZoom,
+    manualSave,
+    loadSaved,
+  } = useProject();
+
+  // ── Video state ────────────────────────────────────────────────────────
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+
+  // ── UI state ───────────────────────────────────────────────────────────
   const [isSending, setIsSending] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
-  useEffect(() => { document.documentElement.classList.add("dark"); }, []);
+  // Live effect preview — CSS style applied to the video wrapper
+  const effectPreviewStyle = useEffectPreview(project.effects, currentTime);
 
-  // Auto-save whenever project changes (debounced)
   useEffect(() => {
-    const t = setTimeout(() => saveProject(project), 1000);
-    return () => clearTimeout(t);
-  }, [project]);
-
-  const updateProject = useCallback((patch: Partial<Project>) => {
-    setProject((p) => ({ ...p, ...patch }));
+    document.documentElement.classList.add("dark");
   }, []);
 
   const handleFileSelect = useCallback(
@@ -768,20 +958,16 @@ function AppInner() {
       setVideoUrl(url);
       setCurrentTime(0);
       setDuration(0);
-      // Metadata gathered after video loads
-      setMetadata((m) => ({
-        ...(m ?? { width: 0, height: 0, duration: 0 }),
+      setMetadata({
         name: file.name,
         sizeBytes: file.size,
         type: file.type,
         width: 0,
         height: 0,
         duration: 0,
-      }));
-      // Reset trim to full video once duration loads
-      updateProject({ trim: { start: 0, end: 0 } });
+      });
     },
-    [videoUrl, updateProject]
+    [videoUrl]
   );
 
   const handleDurationLoad = useCallback(
@@ -790,13 +976,12 @@ function AppInner() {
       if (videoRef.current) {
         const w = videoRef.current.videoWidth;
         const h = videoRef.current.videoHeight;
-        setMetadata((m) =>
-          m ? { ...m, width: w, height: h, duration: d } : null
-        );
+        setMetadata((m) => (m ? { ...m, width: w, height: h, duration: d } : null));
       }
-      updateProject({ trim: { start: 0, end: d } });
+      // Full trim by default
+      setTrim({ start: 0, end: d });
     },
-    [updateProject]
+    [setTrim]
   );
 
   const handleSend = useCallback(
@@ -807,6 +992,7 @@ function AppInner() {
         content: text,
         createdAt: new Date().toISOString(),
       };
+
       setProject((p) => ({ ...p, messages: [...p.messages, userMsg] }));
       setIsSending(true);
 
@@ -821,10 +1007,7 @@ function AppInner() {
         };
 
         setProject((p) => {
-          const next: Project = {
-            ...p,
-            messages: [...p.messages, assistantMsg],
-          };
+          const next = { ...p, messages: [...p.messages, assistantMsg] };
           if (result.command) {
             next.credits = Math.max(0, p.credits - CREDIT_COST);
           }
@@ -837,7 +1020,10 @@ function AppInner() {
           if (result.subtitles) {
             next.subtitles = [
               ...p.subtitles,
-              ...result.subtitles.map((s) => ({ ...s, id: crypto.randomUUID() })),
+              ...result.subtitles.map((s) => ({
+                ...s,
+                id: crypto.randomUUID(),
+              })),
             ];
           }
           if (result.trimMarker !== undefined && duration) {
@@ -845,10 +1031,11 @@ function AppInner() {
           }
           return next;
         });
+
         setIsSending(false);
       }, 700 + Math.random() * 300);
     },
-    [currentTime, duration]
+    [currentTime, duration, setProject]
   );
 
   const handleExport = useCallback((resolution: Resolution) => {
@@ -860,19 +1047,14 @@ function AppInner() {
   }, []);
 
   const handleSave = useCallback(() => {
-    saveProject({ ...project, savedAt: Date.now() });
+    manualSave();
     setToast("Project saved ✓");
-  }, [project]);
+  }, [manualSave]);
 
   const handleLoad = useCallback(() => {
-    const p = loadProject();
-    if (p) {
-      setProject(p);
-      setToast("Project loaded ✓");
-    } else {
-      setToast("No saved project found");
-    }
-  }, []);
+    const ok = loadSaved();
+    setToast(ok ? "Project loaded ✓" : "No saved project found");
+  }, [loadSaved]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -897,37 +1079,30 @@ function AppInner() {
         effects={project.effects}
         trim={project.trim}
         zoom={project.timelineZoom}
+        effectPreviewStyle={effectPreviewStyle}
         onTimeUpdate={setCurrentTime}
         onDurationLoad={handleDurationLoad}
         onSeek={(t) => {
           setCurrentTime(t);
           if (videoRef.current) videoRef.current.currentTime = t;
         }}
-        onTrimChange={(trim) => updateProject({ trim })}
-        onEffectDelete={(id) =>
-          updateProject({ effects: project.effects.filter((e) => e.id !== id) })
-        }
+        onTrimChange={setTrim}
+        onEffectDelete={deleteEffect}
+        onEffectUpdate={updateEffect}
         onSubtitleClick={(sub) => {
           if (videoRef.current) videoRef.current.currentTime = sub.start;
           setCurrentTime(sub.start);
         }}
-        onZoomChange={(z) => updateProject({ timelineZoom: z })}
+        onZoomChange={setZoom}
       />
       <RightPanel
         credits={project.credits}
-        currentTime={currentTime}
         messages={project.messages}
         isSending={isSending}
         subtitles={project.subtitles}
         onSend={handleSend}
-        onSubtitleUpdate={(updated) =>
-          updateProject({
-            subtitles: project.subtitles.map((s) => (s.id === updated.id ? updated : s)),
-          })
-        }
-        onSubtitleDelete={(id) =>
-          updateProject({ subtitles: project.subtitles.filter((s) => s.id !== id) })
-        }
+        onSubtitleUpdate={updateSubtitle}
+        onSubtitleDelete={deleteSubtitle}
       />
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </div>
