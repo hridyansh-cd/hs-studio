@@ -1199,13 +1199,44 @@ export default function App() {
     [currentTime, duration, setProject, videoFile]
   );
 
-  const handleExport = useCallback((_res: Resolution) => {
+  const handleExport = useCallback(async (res: Resolution) => {
+    if (!videoFile) return;
     setIsExporting(true);
-    setTimeout(() => {
+    setToast(`Exporting ${res} — this may take a minute…`);
+    try {
+      const form = new FormData();
+      form.append("video", videoFile);
+      form.append("trimStart", String(project.trim.start));
+      form.append("trimEnd",   String(project.trim.end > 0 ? project.trim.end : duration));
+      form.append("subtitles", JSON.stringify(project.subtitles));
+      form.append("resolution", res);
+
+      const resp = await fetch("/api/editor/export", {
+        method: "POST",
+        body: form,
+      });
+
+      if (!resp.ok) {
+        const body = await resp.json() as { error?: string };
+        throw new Error(body.error ?? `Server error ${resp.status}`);
+      }
+
+      const blob = await resp.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `${project.name.replace(/[^a-z0-9_\-]/gi, "_")}-export.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setToast(`✓ Export complete — ${res} video downloaded`);
+    } catch (err) {
+      setToast(`Export failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
       setIsExporting(false);
-      setToast(`Export complete — ${_res} render saved locally ✓`);
-    }, 2200);
-  }, []);
+    }
+  }, [videoFile, project.trim, project.subtitles, project.name, duration]);
 
   const handleSave = useCallback(() => {
     manualSave();
