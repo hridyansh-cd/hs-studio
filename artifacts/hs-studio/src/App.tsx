@@ -49,6 +49,46 @@ const CREDIT_COST = 5;
 const EXPORT_RESOLUTIONS = ["720p", "1080p", "4K"] as const;
 type Resolution = (typeof EXPORT_RESOLUTIONS)[number];
 
+// ─── Subtitle file generators ───────────────────────────────────────────────────
+
+function fmtSrtTime(s: number): string {
+  const h  = Math.floor(s / 3600);
+  const m  = Math.floor((s % 3600) / 60);
+  const ss = Math.floor(s % 60);
+  const ms = Math.round((s % 1) * 1000);
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(ss).padStart(2,"0")},${String(ms).padStart(3,"0")}`;
+}
+
+function fmtVttTime(s: number): string {
+  return fmtSrtTime(s).replace(",", ".");
+}
+
+function generateSrt(subs: Subtitle[]): string {
+  return subs
+    .filter((s) => s.text.trim())
+    .sort((a, b) => a.start - b.start)
+    .map((s, i) => `${i + 1}\n${fmtSrtTime(s.start)} --> ${fmtSrtTime(s.end)}\n${s.text.trim()}\n`)
+    .join("\n");
+}
+
+function generateVtt(subs: Subtitle[]): string {
+  const body = subs
+    .filter((s) => s.text.trim())
+    .sort((a, b) => a.start - b.start)
+    .map((s, i) => `${i + 1}\n${fmtVttTime(s.start)} --> ${fmtVttTime(s.end)}\n${s.text.trim()}\n`)
+    .join("\n");
+  return `WEBVTT\n\n${body}`;
+}
+
+function downloadText(content: string, filename: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
 // ─── Toast ─────────────────────────────────────────────────────────────────────
 
 const Toast = memo(
@@ -139,6 +179,10 @@ function LeftPanel({
   onFileSelect,
   onExport,
   isExporting,
+  burnSubs,
+  onBurnSubsChange,
+  exportProgress,
+  isVideoLoading,
   onSave,
   onLoad,
   onProjectNameChange,
@@ -151,6 +195,10 @@ function LeftPanel({
   onFileSelect: (file: File) => void;
   onExport: (res: Resolution) => void;
   isExporting: boolean;
+  burnSubs: boolean;
+  onBurnSubsChange: (v: boolean) => void;
+  exportProgress: number | null;
+  isVideoLoading: boolean;
   onSave: () => void;
   onLoad: () => void;
   onProjectNameChange: (name: string) => void;
@@ -163,7 +211,7 @@ function LeftPanel({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file?.type.startsWith("video/")) onFileSelect(file);
+    if (file) onFileSelect(file);
   };
 
   const formatBytes = (b: number) =>
@@ -218,11 +266,11 @@ function LeftPanel({
             <input
               ref={fileRef}
               type="file"
-              accept="video/*"
+              accept="video/mp4,video/quicktime,video/webm,video/x-msvideo,video/x-matroska,video/*"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f?.type.startsWith("video/")) onFileSelect(f);
+                if (f) onFileSelect(f);
               }}
             />
             <div
@@ -238,12 +286,14 @@ function LeftPanel({
                 )}
               />
             </div>
-            {videoUrl ? (
+            {isVideoLoading ? (
+              <p className="text-xs font-semibold text-muted-foreground animate-pulse">Loading video…</p>
+            ) : videoUrl ? (
               <p className="text-xs font-semibold text-primary">Video loaded ✓</p>
             ) : (
               <>
                 <p className="text-xs font-semibold">Drag & drop or click</p>
-                <p className="text-[10px] text-muted-foreground">MP4 · WebM · MOV</p>
+                <p className="text-[10px] text-muted-foreground">MP4 · MOV · WebM · AVI · MKV</p>
               </>
             )}
           </div>
@@ -329,6 +379,17 @@ function LeftPanel({
               </div>
             )}
           </div>
+          {/* Burn subtitles toggle */}
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={burnSubs}
+              onChange={(e) => onBurnSubsChange(e.target.checked)}
+              className="w-3 h-3 accent-primary"
+            />
+            <span className="text-[10px] text-muted-foreground">Burn subtitles into video</span>
+          </label>
+
           <Button
             className="w-full gap-2 text-xs h-8"
             disabled={!videoUrl || isExporting}
@@ -337,7 +398,7 @@ function LeftPanel({
             {isExporting ? (
               <>
                 <div className="w-3 h-3 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                Exporting…
+                {exportProgress != null ? `${exportProgress}%` : "Exporting…"}
               </>
             ) : (
               <>
@@ -345,6 +406,21 @@ function LeftPanel({
               </>
             )}
           </Button>
+
+          {/* Export progress bar */}
+          {isExporting && exportProgress != null && (
+            <div className="space-y-1">
+              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  style={{ width: `${exportProgress}%` }}
+                />
+              </div>
+              <p className="text-[9px] text-muted-foreground/60 text-center">
+                FFmpeg rendering · {exportProgress}% complete
+              </p>
+            </div>
+          )}
         </section>
 
         {/* Project */}
@@ -427,6 +503,8 @@ function CenterPanel({
   onEffectUpdate,
   onSubtitleClick,
   onZoomChange,
+  onSubtitleMove,
+  onEffectMove,
   videoRef,
 }: {
   videoUrl: string | null;
@@ -445,6 +523,8 @@ function CenterPanel({
   onEffectUpdate: (effect: Effect) => void;
   onSubtitleClick: (s: Subtitle) => void;
   onZoomChange: (z: number) => void;
+  onSubtitleMove?: (id: string, s: number, e: number) => void;
+  onEffectMove?: (id: string, s: number, e: number) => void;
   videoRef: React.RefObject<HTMLVideoElement | null>;
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -593,6 +673,8 @@ function CenterPanel({
         onEffectUpdate={onEffectUpdate}
         onSubtitleClick={onSubtitleClick}
         onZoomChange={onZoomChange}
+        onSubtitleMove={onSubtitleMove}
+        onEffectMove={onEffectMove}
       />
     </main>
   );
@@ -774,6 +856,8 @@ function RightPanel({
   onSubtitleDelete,
   onSubtitleAdd,
   onSeek,
+  onDownloadSrt,
+  onDownloadVtt,
 }: {
   credits: number;
   messages: ChatMessage[];
@@ -786,6 +870,8 @@ function RightPanel({
   onSubtitleDelete: (id: string) => void;
   onSubtitleAdd: (sub: Omit<Subtitle, "id">) => void;
   onSeek: (t: number) => void;
+  onDownloadSrt: () => void;
+  onDownloadVtt: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState("");
@@ -987,6 +1073,24 @@ function RightPanel({
               </div>
             )}
           </div>
+          {/* SRT / VTT download buttons */}
+          <div className="px-2 pt-2 flex gap-1.5 shrink-0">
+            <button
+              onClick={onDownloadSrt}
+              disabled={subtitles.length === 0}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-border/60 text-[10px] text-muted-foreground hover:text-foreground hover:border-primary/40 hover:bg-primary/5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <FileText className="w-3 h-3" /> SRT
+            </button>
+            <button
+              onClick={onDownloadVtt}
+              disabled={subtitles.length === 0}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-border/60 text-[10px] text-muted-foreground hover:text-foreground hover:border-primary/40 hover:bg-primary/5 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <FileText className="w-3 h-3" /> VTT
+            </button>
+          </div>
+
           {/* Add subtitle button */}
           <div className="p-2 border-t border-border/40 shrink-0">
             <button
@@ -1033,6 +1137,9 @@ export default function App() {
   const [duration, setDuration] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
+  const [burnSubs, setBurnSubs] = useState(true);
+  const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const effectPreviewStyle = useEffectPreview(project.effects, currentTime);
@@ -1049,6 +1156,7 @@ export default function App() {
       setVideoFile(file);
       setCurrentTime(0);
       setDuration(0);
+      setIsVideoLoading(true);
       setMetadata({
         name: file.name,
         sizeBytes: file.size,
@@ -1063,6 +1171,7 @@ export default function App() {
 
   const handleDurationLoad = useCallback(
     (d: number) => {
+      setIsVideoLoading(false);
       setDuration(d);
       if (videoRef.current) {
         const w = videoRef.current.videoWidth;
@@ -1203,25 +1312,38 @@ export default function App() {
   const handleExport = useCallback(async (res: Resolution) => {
     if (!videoFile) return;
     setIsExporting(true);
-    setToast(`Exporting ${res} — this may take a minute…`);
+    setExportProgress(0);
+
+    const jobId = crypto.randomUUID();
+
+    const sse = new EventSource(`/api/editor/export/progress/${jobId}`);
+    sse.onmessage = (ev: MessageEvent) => {
+      try {
+        const data = JSON.parse(ev.data as string) as { progress?: number; done?: boolean };
+        if (data.progress !== undefined) setExportProgress(data.progress);
+        if (data.done) sse.close();
+      } catch { /* ignore parse errors */ }
+    };
+
     try {
       const form = new FormData();
       form.append("video", videoFile);
+      form.append("jobId", jobId);
       form.append("trimStart", String(project.trim.start));
       form.append("trimEnd",   String(project.trim.end > 0 ? project.trim.end : duration));
-      form.append("subtitles", JSON.stringify(project.subtitles));
+      form.append("subtitles", burnSubs ? JSON.stringify(project.subtitles) : "[]");
+      form.append("burnSubtitles", String(burnSubs));
       form.append("resolution", res);
+      form.append("duration", String(duration));
 
-      const resp = await fetch("/api/editor/export", {
-        method: "POST",
-        body: form,
-      });
+      const resp = await fetch("/api/editor/export", { method: "POST", body: form });
 
       if (!resp.ok) {
         const body = await resp.json() as { error?: string };
         throw new Error(body.error ?? `Server error ${resp.status}`);
       }
 
+      setExportProgress(100);
       const blob = await resp.blob();
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
@@ -1235,9 +1357,35 @@ export default function App() {
     } catch (err) {
       setToast(`Export failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
+      sse.close();
       setIsExporting(false);
+      setExportProgress(null);
     }
-  }, [videoFile, project.trim, project.subtitles, project.name, duration]);
+  }, [videoFile, project.trim, project.subtitles, project.name, duration, burnSubs]);
+
+  const handleSubtitleMove = useCallback(
+    (id: string, newStart: number, newEnd: number) => {
+      setProject((p) => ({
+        ...p,
+        subtitles: p.subtitles.map((s) =>
+          s.id === id ? { ...s, start: newStart, end: newEnd } : s
+        ),
+      }));
+    },
+    [setProject]
+  );
+
+  const handleEffectMove = useCallback(
+    (id: string, newStart: number, newEnd: number) => {
+      setProject((p) => ({
+        ...p,
+        effects: p.effects.map((e) =>
+          e.id === id ? { ...e, start: newStart, end: newEnd } : e
+        ),
+      }));
+    },
+    [setProject]
+  );
 
   const handleSave = useCallback(() => {
     manualSave();
@@ -1259,6 +1407,10 @@ export default function App() {
         onFileSelect={handleFileSelect}
         onExport={handleExport}
         isExporting={isExporting}
+        burnSubs={burnSubs}
+        onBurnSubsChange={setBurnSubs}
+        exportProgress={exportProgress}
+        isVideoLoading={isVideoLoading}
         onSave={handleSave}
         onLoad={handleLoad}
         onProjectNameChange={(name) => updateProject({ name })}
@@ -1288,6 +1440,8 @@ export default function App() {
           setCurrentTime(sub.start);
         }}
         onZoomChange={setZoom}
+        onSubtitleMove={handleSubtitleMove}
+        onEffectMove={handleEffectMove}
       />
       <RightPanel
         credits={project.credits}
@@ -1308,6 +1462,20 @@ export default function App() {
         onSeek={(t) => {
           setCurrentTime(t);
           if (videoRef.current) videoRef.current.currentTime = t;
+        }}
+        onDownloadSrt={() => {
+          downloadText(
+            generateSrt(project.subtitles),
+            `${project.name.replace(/[^a-z0-9_\-]/gi, "_")}-subtitles.srt`,
+            "text/plain"
+          );
+        }}
+        onDownloadVtt={() => {
+          downloadText(
+            generateVtt(project.subtitles),
+            `${project.name.replace(/[^a-z0-9_\-]/gi, "_")}-subtitles.vtt`,
+            "text/vtt"
+          );
         }}
       />
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
