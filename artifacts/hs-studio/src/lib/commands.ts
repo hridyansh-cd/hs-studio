@@ -7,7 +7,7 @@ export interface CommandResult {
   command: CommandType | null;
   effect?: Omit<Effect, "id">;
   subtitles?: Omit<Subtitle, "id">[];
-  trimMarker?: number;
+  cut?: { start: number; end: number };
 }
 
 export function detectCommand(input: string): CommandType | null {
@@ -40,12 +40,16 @@ export function processCommand(
   }
 
   switch (cmd) {
-    case "cut":
+    case "cut": {
+      const cutDur = Math.min(5, (duration || 10) / 4);
+      const cutStart = Math.max(0, currentTime);
+      const cutEnd = Math.min(cutStart + cutDur, duration || cutStart + cutDur);
       return {
-        message: `Trim marker added at ${fmt(currentTime)}. Drag the handles on the Video track to adjust the clip range.`,
+        message: `Cut region added from ${fmt(cutStart)} to ${fmt(cutEnd)}. That section will be removed in the exported video.`,
         command: "cut",
-        trimMarker: currentTime,
+        cut: { start: cutStart, end: cutEnd },
       };
+    }
 
     case "subtitle": {
       return {

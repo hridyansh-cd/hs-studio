@@ -28,6 +28,11 @@ export interface TrimState {
   end: number;
 }
 
+export interface Cut {
+  start: number;
+  end: number;
+}
+
 export interface VideoMetadata {
   name: string;
   sizeBytes: number;
@@ -43,6 +48,7 @@ export interface Project {
   subtitles: Subtitle[];
   effects: Effect[];
   trim: TrimState;
+  cuts: Cut[];
   messages: ChatMessage[];
   credits: number;
   timelineZoom: number;

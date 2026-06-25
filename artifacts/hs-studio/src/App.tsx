@@ -1298,8 +1298,8 @@ export default function App() {
               ...result.subtitles.map((s) => ({ ...s, id: crypto.randomUUID() })),
             ];
           }
-          if (result.trimMarker !== undefined && duration) {
-            next.trim = { start: 0, end: result.trimMarker };
+          if (result.cut) {
+            next.cuts = [...(p.cuts ?? []), result.cut];
           }
           return next;
         });
@@ -1335,6 +1335,8 @@ export default function App() {
       form.append("burnSubtitles", String(burnSubs));
       form.append("resolution", res);
       form.append("duration", String(duration));
+      form.append("cuts", JSON.stringify(project.cuts ?? []));
+      form.append("effects", JSON.stringify(project.effects ?? []));
 
       const resp = await fetch("/api/editor/export", { method: "POST", body: form });
 

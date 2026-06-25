@@ -7,6 +7,7 @@ export const DEFAULT_PROJECT: Project = {
   subtitles: [],
   effects: [],
   trim: { start: 0, end: 0 },
+  cuts: [],
   messages: [],
   credits: 50,
   timelineZoom: 1,
