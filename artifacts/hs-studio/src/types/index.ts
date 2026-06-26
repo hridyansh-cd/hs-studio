@@ -15,11 +15,20 @@ export interface Effect {
   end: number;
 }
 
+export interface Suggestion {
+  title: string;
+  description: string;
+  command: 'cut' | 'zoom' | null;
+  cut?: { start: number; end: number };
+  effect?: { type: string; label: string; start: number; end: number };
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   command?: CommandType;
+  suggestions?: Suggestion[];
   createdAt: string;
 }
 

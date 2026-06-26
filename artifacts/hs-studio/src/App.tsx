@@ -28,6 +28,8 @@ import {
   Plus,
   Clock,
   FileText,
+  Camera,
+  Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +47,7 @@ import type {
   VideoMetadata,
   CommandType,
   Cut,
+  Suggestion,
 } from "@/types";
 
 const CREDIT_COST = 5;
@@ -867,7 +870,10 @@ function RightPanel({
   subtitles,
   currentTime,
   duration,
+  hasVideo,
   onSend,
+  onAnalyzeFrame,
+  onApplySuggestion,
   onSubtitleUpdate,
   onSubtitleDelete,
   onSubtitleAdd,
@@ -881,7 +887,10 @@ function RightPanel({
   subtitles: Subtitle[];
   currentTime: number;
   duration: number;
+  hasVideo: boolean;
   onSend: (text: string) => void;
+  onAnalyzeFrame: () => void;
+  onApplySuggestion: (s: Suggestion) => void;
   onSubtitleUpdate: (s: Subtitle) => void;
   onSubtitleDelete: (id: string) => void;
   onSubtitleAdd: (sub: Omit<Subtitle, "id">) => void;
@@ -971,29 +980,74 @@ function RightPanel({
               </div>
             )}
             {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={cn(
-                  "flex flex-col max-w-[90%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
-                  msg.role === "user"
-                    ? "ml-auto bg-primary text-primary-foreground rounded-br-sm"
-                    : "bg-muted/50 text-foreground rounded-bl-sm border border-border/50"
+              <div key={msg.id} className="flex flex-col gap-1.5">
+                <div
+                  className={cn(
+                    "flex flex-col max-w-[90%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
+                    msg.role === "user"
+                      ? "ml-auto bg-primary text-primary-foreground rounded-br-sm"
+                      : "bg-muted/50 text-foreground rounded-bl-sm border border-border/50"
+                  )}
+                >
+                  {msg.role === "assistant" && msg.command && (
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md border mb-1.5 self-start",
+                        COMMAND_COLORS[msg.command]
+                      )}
+                    >
+                      {msg.command === "cut" && <Scissors className="w-2.5 h-2.5" />}
+                      {msg.command === "subtitle" && <Type className="w-2.5 h-2.5" />}
+                      {msg.command === "zoom" && <ZoomInIcon className="w-2.5 h-2.5" />}
+                      {msg.command.toUpperCase()}
+                    </span>
+                  )}
+                  <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                </div>
+                {msg.suggestions && msg.suggestions.length > 0 && (
+                  <div className="flex flex-col gap-1.5 max-w-[95%]">
+                    {msg.suggestions.map((s, i) => (
+                      <div
+                        key={i}
+                        className="bg-background/60 border border-border/60 rounded-xl px-3 py-2.5 flex flex-col gap-1"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex flex-col gap-0.5 min-w-0">
+                            <span className="text-[11px] font-semibold text-foreground leading-tight truncate">
+                              {s.title}
+                            </span>
+                            <p className="text-[10px] text-muted-foreground leading-snug line-clamp-2">
+                              {s.description}
+                            </p>
+                          </div>
+                          {s.command && (
+                            <button
+                              onClick={() => onApplySuggestion(s)}
+                              className="shrink-0 flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-lg bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 transition-colors"
+                              title="Apply this suggestion"
+                            >
+                              <Wand2 className="w-2.5 h-2.5" />
+                              Apply
+                            </button>
+                          )}
+                        </div>
+                        {s.command && (
+                          <span
+                            className={cn(
+                              "self-start inline-flex items-center gap-0.5 text-[9px] font-bold px-1 py-0.5 rounded border uppercase tracking-wider",
+                              s.command === "cut"
+                                ? "bg-red-500/10 text-red-400 border-red-500/20"
+                                : "bg-violet-500/10 text-violet-400 border-violet-500/20"
+                            )}
+                          >
+                            {s.command === "cut" ? <Scissors className="w-2 h-2" /> : <ZoomInIcon className="w-2 h-2" />}
+                            {s.command}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
-              >
-                {msg.role === "assistant" && msg.command && (
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md border mb-1.5 self-start",
-                      COMMAND_COLORS[msg.command]
-                    )}
-                  >
-                    {msg.command === "cut" && <Scissors className="w-2.5 h-2.5" />}
-                    {msg.command === "subtitle" && <Type className="w-2.5 h-2.5" />}
-                    {msg.command === "zoom" && <ZoomInIcon className="w-2.5 h-2.5" />}
-                    {msg.command.toUpperCase()}
-                  </span>
-                )}
-                <p className="whitespace-pre-wrap break-words">{msg.content}</p>
               </div>
             ))}
             {isSending && (
@@ -1021,6 +1075,17 @@ function RightPanel({
                 disabled={isSending || credits <= 0}
                 className="flex-1 h-9 text-xs bg-background/80"
               />
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                className="h-9 w-9 shrink-0"
+                disabled={isSending || !hasVideo || credits <= 0}
+                title={hasVideo ? "Analyze current frame" : "Upload a video first"}
+                onClick={onAnalyzeFrame}
+              >
+                <Camera className="w-3.5 h-3.5" />
+              </Button>
               <Button
                 type="submit"
                 size="icon"
@@ -1391,6 +1456,99 @@ export default function App() {
     [currentTime, duration, project, setProject, videoFile]
   );
 
+  const handleAnalyzeFrame = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || !videoFile) return;
+
+    const maxW = 1024;
+    const vw = video.videoWidth || 1280;
+    const vh = video.videoHeight || 720;
+    const scale = Math.min(1, maxW / vw);
+    const canvas = document.createElement("canvas");
+    canvas.width  = Math.round(vw * scale);
+    canvas.height = Math.round(vh * scale);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imageBase64 = canvas.toDataURL("image/jpeg", 0.75).split(",")[1];
+
+    const m = Math.floor(currentTime / 60);
+    const s = String(Math.floor(currentTime % 60)).padStart(2, "0");
+    const pendingId = crypto.randomUUID();
+    setProject((p) => ({
+      ...p,
+      messages: [
+        ...p.messages,
+        {
+          id: pendingId,
+          role: "assistant" as const,
+          content: `📸 Analyzing frame at ${m > 0 ? `${m}:${s}` : `${s}s`}…`,
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    }));
+    setIsSending(true);
+
+    try {
+      const resp = await fetch("/api/editor/analyze-frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64,
+          currentTime,
+          duration,
+          cuts:    project.cuts ?? [],
+          effects: project.effects,
+          subtitleCount: project.subtitles.length,
+        }),
+      });
+
+      if (!resp.ok) {
+        const err = (await resp.json()) as { error?: string };
+        throw new Error(err.error ?? "Analysis failed");
+      }
+
+      const data = (await resp.json()) as { suggestions: Suggestion[] };
+
+      setProject((p) => ({
+        ...p,
+        messages: p.messages.map((msg) =>
+          msg.id === pendingId
+            ? { ...msg, content: "Here's what I see in this frame:", suggestions: data.suggestions }
+            : msg
+        ),
+      }));
+    } catch (err: unknown) {
+      setProject((p) => ({
+        ...p,
+        messages: p.messages.map((msg) =>
+          msg.id === pendingId
+            ? { ...msg, content: `Analysis failed: ${err instanceof Error ? err.message : "Unknown error"}` }
+            : msg
+        ),
+      }));
+    } finally {
+      setIsSending(false);
+    }
+  }, [currentTime, duration, project, setProject, videoFile, videoRef]);
+
+  const handleApplySuggestion = useCallback((suggestion: Suggestion) => {
+    setProject((p) => {
+      const next = { ...p, credits: Math.max(0, p.credits - CREDIT_COST) };
+      if (suggestion.cut) {
+        next.cuts = [...(p.cuts ?? []), suggestion.cut];
+      }
+      if (suggestion.effect) {
+        next.effects = [
+          ...p.effects,
+          { ...suggestion.effect, id: crypto.randomUUID() } as Effect,
+        ];
+      }
+      return next;
+    });
+    setToast(`✓ Applied: ${suggestion.title}`);
+  }, [setProject]);
+
   const handleExport = useCallback(async (res: Resolution) => {
     if (!videoFile) return;
     setIsExporting(true);
@@ -1583,7 +1741,10 @@ export default function App() {
         subtitles={project.subtitles}
         currentTime={currentTime}
         duration={duration}
+        hasVideo={!!videoFile}
         onSend={handleSend}
+        onAnalyzeFrame={handleAnalyzeFrame}
+        onApplySuggestion={handleApplySuggestion}
         onSubtitleUpdate={updateSubtitle}
         onSubtitleDelete={deleteSubtitle}
         onSubtitleAdd={(sub) => {
