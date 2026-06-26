@@ -36,6 +36,7 @@ import { Timeline } from "@/components/Timeline";
 import { processCommand, COMMAND_COLORS } from "@/lib/commands";
 import { useProject } from "@/hooks/useProject";
 import { useEffectPreview } from "@/hooks/useEffectPreview";
+import { useAudioWaveform } from "@/hooks/useAudioWaveform";
 import type {
   Subtitle,
   Effect,
@@ -499,6 +500,8 @@ function CenterPanel({
   trim,
   zoom,
   effectPreviewStyle,
+  waveformBars,
+  waveformLoading,
   onTimeUpdate,
   onDurationLoad,
   onSeek,
@@ -533,6 +536,8 @@ function CenterPanel({
   onEffectMove?: (id: string, s: number, e: number) => void;
   onCutDelete?: (index: number) => void;
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  waveformBars?: number[];
+  waveformLoading?: boolean;
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
 
@@ -675,6 +680,8 @@ function CenterPanel({
         cuts={cuts}
         trim={trim}
         zoom={zoom}
+        waveformBars={waveformBars}
+        waveformLoading={waveformLoading}
         onSeek={seek}
         onTrimChange={onTrimChange}
         onEffectDelete={onEffectDelete}
@@ -1141,6 +1148,7 @@ export default function App() {
 
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
+  const { bars: waveformBars, loading: waveformLoading } = useAudioWaveform(videoFile);
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -1502,6 +1510,8 @@ export default function App() {
         trim={project.trim}
         zoom={project.timelineZoom}
         effectPreviewStyle={effectPreviewStyle}
+        waveformBars={waveformBars}
+        waveformLoading={waveformLoading}
         onTimeUpdate={setCurrentTime}
         onDurationLoad={handleDurationLoad}
         onSeek={(t) => {

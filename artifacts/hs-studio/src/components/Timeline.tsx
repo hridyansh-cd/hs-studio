@@ -61,6 +61,8 @@ interface TimelineProps {
   cuts: Cut[];
   trim: TrimState;
   zoom: number;
+  waveformBars?: number[];
+  waveformLoading?: boolean;
   onSeek: (t: number) => void;
   onTrimChange: (trim: TrimState) => void;
   onEffectDelete: (id: string) => void;
@@ -92,6 +94,8 @@ export function Timeline({
   cuts,
   trim,
   zoom,
+  waveformBars = [],
+  waveformLoading = false,
   onSeek,
   onTrimChange,
   onEffectDelete,
@@ -483,22 +487,54 @@ export function Timeline({
                 onSeek(Math.max(0, Math.min(duration, (x / totalPx) * duration)));
               }}
             >
-              <div className="absolute inset-y-2 left-0 right-0 rounded overflow-hidden">
+              <div className="absolute inset-y-1 left-0 right-0 rounded overflow-hidden bg-emerald-950/20">
+                {waveformLoading && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-[8px] text-emerald-500/50 animate-pulse tracking-widest uppercase">
+                      Analyzing…
+                    </span>
+                  </div>
+                )}
+                {waveformBars.length > 0 && (
+                  <svg
+                    className="absolute inset-0 w-full h-full"
+                    preserveAspectRatio="none"
+                    viewBox={`0 0 ${waveformBars.length} 100`}
+                  >
+                    {waveformBars.map((amp, i) => {
+                      const barH = Math.max(1, amp * 90);
+                      const y = (100 - barH) / 2;
+                      return (
+                        <rect
+                          key={i}
+                          x={i + 0.1}
+                          y={y}
+                          width={0.8}
+                          height={barH}
+                          fill={`rgba(34,197,94,${0.25 + amp * 0.55})`}
+                          rx={0.3}
+                        />
+                      );
+                    })}
+                  </svg>
+                )}
+                {!waveformLoading && waveformBars.length === 0 && (
+                  <div
+                    className="absolute inset-0 opacity-30"
+                    style={{
+                      background:
+                        "repeating-linear-gradient(90deg, " +
+                        "rgba(34,197,94,0.08) 0px, rgba(34,197,94,0.22) 2px, " +
+                        "rgba(34,197,94,0.04) 4px, rgba(34,197,94,0.18) 7px, " +
+                        "rgba(34,197,94,0.06) 9px, rgba(34,197,94,0.14) 11px, " +
+                        "rgba(34,197,94,0.10) 14px)",
+                      maskImage: "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 30%, rgba(0,0,0,1) 70%, transparent 100%)",
+                      WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 30%, rgba(0,0,0,1) 70%, transparent 100%)",
+                    }}
+                  />
+                )}
                 <div
-                  className="h-full w-full opacity-60"
-                  style={{
-                    background:
-                      "repeating-linear-gradient(90deg, " +
-                      "rgba(34,197,94,0.08) 0px, rgba(34,197,94,0.22) 2px, " +
-                      "rgba(34,197,94,0.04) 4px, rgba(34,197,94,0.18) 7px, " +
-                      "rgba(34,197,94,0.06) 9px, rgba(34,197,94,0.14) 11px, " +
-                      "rgba(34,197,94,0.10) 14px)",
-                    maskImage: "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 30%, rgba(0,0,0,1) 70%, transparent 100%)",
-                    WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 30%, rgba(0,0,0,1) 70%, transparent 100%)",
-                  }}
-                />
-                <div
-                  className="absolute top-0 bottom-0 w-px bg-emerald-400/40 z-10 pointer-events-none"
+                  className="absolute top-0 bottom-0 w-px bg-emerald-400/60 z-10 pointer-events-none"
                   style={{ left: playheadX }}
                 />
               </div>
