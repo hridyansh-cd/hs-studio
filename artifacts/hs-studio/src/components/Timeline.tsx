@@ -17,7 +17,7 @@ import {
   ChevronLeft,
   Volume2,
 } from "lucide-react";
-import type { Subtitle, Effect, TrimState } from "@/types";
+import type { Subtitle, Effect, TrimState, Cut } from "@/types";
 import { cn } from "@/lib/utils";
 
 const RULER_H = 22;
@@ -58,6 +58,7 @@ interface TimelineProps {
   currentTime: number;
   subtitles: Subtitle[];
   effects: Effect[];
+  cuts: Cut[];
   trim: TrimState;
   zoom: number;
   onSeek: (t: number) => void;
@@ -68,6 +69,7 @@ interface TimelineProps {
   onZoomChange: (z: number) => void;
   onSubtitleMove?: (id: string, newStart: number, newEnd: number) => void;
   onEffectMove?: (id: string, newStart: number, newEnd: number) => void;
+  onCutDelete?: (index: number) => void;
 }
 
 function formatTime(t: number): string {
@@ -87,6 +89,7 @@ export function Timeline({
   currentTime,
   subtitles,
   effects,
+  cuts,
   trim,
   zoom,
   onSeek,
@@ -97,6 +100,7 @@ export function Timeline({
   onZoomChange,
   onSubtitleMove,
   onEffectMove,
+  onCutDelete,
 }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [trimDrag, setTrimDrag] = useState<"start" | "end" | null>(null);
@@ -105,6 +109,7 @@ export function Timeline({
   const [showFx,   setShowFx]   = useState(true);
   const [selectedEffectId, setSelectedEffectId] = useState<string | null>(null);
   const [containerW, setContainerW] = useState(800);
+  const [hoveredCutIdx, setHoveredCutIdx] = useState<number | null>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -171,7 +176,6 @@ export function Timeline({
     };
 
     const onUp = (e: MouseEvent) => {
-      // If not dragged, treat as a click (handled by the element itself)
       e.stopPropagation();
       setSegDrag(null);
     };
@@ -215,7 +219,7 @@ export function Timeline({
     );
   }
 
-  const trackCount = 2 + (showSubs ? 1 : 0) + (showFx ? 1 : 0); // VID + AUD + optional SUB/FX
+  const trackCount = 2 + (showSubs ? 1 : 0) + (showFx ? 1 : 0);
   const totalH     = RULER_H + trackCount * TRACK_H + 6;
   const playheadX  = timeToX(currentTime);
   const trimStartX = timeToX(trim.start);
@@ -286,6 +290,14 @@ export function Timeline({
           >
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
+          {cuts.length > 0 && (
+            <>
+              <div className="w-px h-4 bg-border/40 mx-0.5" />
+              <span className="text-[10px] text-red-400/70 font-medium">
+                {cuts.length} cut{cuts.length !== 1 ? "s" : ""}
+              </span>
+            </>
+          )}
           <div className="flex-1" />
           <button
             onClick={() => setShowSubs((v) => !v)}
@@ -381,14 +393,63 @@ export function Timeline({
                 onSeek(Math.max(0, Math.min(duration, (x / totalPx) * duration)));
               }}
             >
+              {/* Base track background */}
               <div className="absolute inset-y-2.5 left-0 right-0 bg-muted/20 rounded" />
+
+              {/* Trim region highlight */}
               <div
                 className="absolute inset-y-2.5 bg-primary/20 border-y border-primary/40 rounded"
                 style={{ left: trimStartX, width: Math.max(0, trimEndX - trimStartX) }}
               />
+
+              {/* ── Cut regions — rendered as red hatched overlays ── */}
+              {cuts.map((cut, idx) => {
+                const left  = timeToX(cut.start);
+                const width = Math.max(timeToX(cut.end) - left, 4);
+                const isHovered = hoveredCutIdx === idx;
+                return (
+                  <div
+                    key={idx}
+                    className={cn(
+                      "absolute inset-y-1 z-10 rounded transition-all group/cut",
+                      isHovered
+                        ? "bg-red-500/50 border border-red-400/80"
+                        : "bg-red-500/30 border border-red-500/50"
+                    )}
+                    style={{ left, width }}
+                    title={`Cut: ${formatTime(cut.start)} – ${formatTime(cut.end)}\nClick × to remove`}
+                    onMouseEnter={(e) => { e.stopPropagation(); setHoveredCutIdx(idx); }}
+                    onMouseLeave={() => setHoveredCutIdx(null)}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {/* Diagonal stripe pattern */}
+                    <div
+                      className="absolute inset-0 rounded overflow-hidden opacity-40"
+                      style={{
+                        backgroundImage: "repeating-linear-gradient(-45deg, transparent, transparent 3px, rgba(239,68,68,0.4) 3px, rgba(239,68,68,0.4) 5px)",
+                      }}
+                    />
+                    {/* Delete button — shows on hover */}
+                    {isHovered && onCutDelete && width > 14 && (
+                      <button
+                        className="absolute inset-0 flex items-center justify-center z-20"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onCutDelete(idx);
+                          setHoveredCutIdx(null);
+                        }}
+                        title="Remove cut"
+                      >
+                        <X className="w-3 h-3 text-red-200 drop-shadow" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+
               {/* Trim start handle */}
               <div
-                className="absolute top-1 bottom-1 w-4 flex items-center justify-center cursor-ew-resize z-10 group/h"
+                className="absolute top-1 bottom-1 w-4 flex items-center justify-center cursor-ew-resize z-20 group/h"
                 style={{ left: trimStartX - 8 }}
                 onMouseDown={(e) => { e.stopPropagation(); setTrimDrag("start"); }}
               >
@@ -396,7 +457,7 @@ export function Timeline({
               </div>
               {/* Trim end handle */}
               <div
-                className="absolute top-1 bottom-1 w-4 flex items-center justify-center cursor-ew-resize z-10 group/h"
+                className="absolute top-1 bottom-1 w-4 flex items-center justify-center cursor-ew-resize z-20 group/h"
                 style={{ left: trimEndX - 8 }}
                 onMouseDown={(e) => { e.stopPropagation(); setTrimDrag("end"); }}
               >
@@ -404,7 +465,7 @@ export function Timeline({
               </div>
               {/* Playhead */}
               <div
-                className="absolute top-0 bottom-0 w-px bg-white/70 z-20 pointer-events-none"
+                className="absolute top-0 bottom-0 w-px bg-white/70 z-30 pointer-events-none"
                 style={{ left: playheadX }}
               >
                 <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-white/80" />
@@ -422,7 +483,6 @@ export function Timeline({
                 onSeek(Math.max(0, Math.min(duration, (x / totalPx) * duration)));
               }}
             >
-              {/* Waveform visual — decorative pseudo-waveform */}
               <div className="absolute inset-y-2 left-0 right-0 rounded overflow-hidden">
                 <div
                   className="h-full w-full opacity-60"
@@ -437,7 +497,6 @@ export function Timeline({
                     WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, rgba(0,0,0,1) 30%, rgba(0,0,0,1) 70%, transparent 100%)",
                   }}
                 />
-                {/* Playhead region highlight */}
                 <div
                   className="absolute top-0 bottom-0 w-px bg-emerald-400/40 z-10 pointer-events-none"
                   style={{ left: playheadX }}

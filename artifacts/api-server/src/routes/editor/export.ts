@@ -9,8 +9,15 @@ import { EventEmitter } from "events";
 
 const router = Router();
 
+// Disk storage — avoids loading the entire video into RAM
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, os.tmpdir()),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname) || ".mp4";
+      cb(null, `hs-export-in-${crypto.randomUUID()}${ext}`);
+    },
+  }),
   limits: { fileSize: 500 * 1024 * 1024 },
 });
 
@@ -63,8 +70,9 @@ router.get("/editor/export/progress/:jobId", (req, res): void => {
     if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
-  const MAX_WAIT = 10_000;
-  const POLL_MS  = 100;
+  // Poll for up to 5 minutes — large file uploads can take a long time
+  const MAX_WAIT = 5 * 60 * 1000;
+  const POLL_MS  = 200;
   let waited = 0;
 
   const tryConnect = () => {
@@ -86,7 +94,7 @@ router.get("/editor/export/progress/:jobId", (req, res): void => {
       waited += POLL_MS;
       setTimeout(tryConnect, POLL_MS);
     } else {
-      send({ done: true, error: "Job not found" });
+      send({ done: true, error: "Job not found — upload may have timed out" });
       res.end();
     }
   };
@@ -130,10 +138,6 @@ function parseTimecode(s: string): number {
 
 // ── Segment computation ───────────────────────────────────────────────────────
 
-/**
- * Given a trim window [trimStart, trimEnd] and an array of cut regions,
- * returns the list of kept segments in original-video time.
- */
 function computeSegments(trimStart: number, trimEnd: number, cuts: Seg[]): Seg[] {
   const validCuts = cuts
     .filter((c) => c.end > trimStart && c.start < trimEnd)
@@ -150,10 +154,6 @@ function computeSegments(trimStart: number, trimEnd: number, cuts: Seg[]): Seg[]
   return segs.length > 0 ? segs : [{ start: trimStart, end: trimEnd }];
 }
 
-/**
- * Maps an original-video timestamp to its equivalent position in the
- * output video (after trim + cuts have been applied).
- */
 function toOutputTime(origT: number, segs: Seg[]): number {
   let out = 0;
   for (const seg of segs) {
@@ -231,12 +231,11 @@ function buildFfmpegArgs(opts: {
       oS: toOutputTime(e.start, segs),
       oE: toOutputTime(e.end,   segs),
     }))
-    .filter((z) => z.oE > z.oS + 0.05);  // must be at least 50 ms
+    .filter((z) => z.oE > z.oS + 0.05);
 
   let vLabel = "vraw";
   if (validZooms.length > 0) {
     const nz = validZooms.length;
-    // Split [vraw] into nz+1 streams: 1 base + nz effect sources
     const splitLabels = [`vbase0`, ...Array.from({ length: nz }, (_, i) => `vzs${i}`)];
     fp.push(`[${vLabel}]split=${nz + 1}${splitLabels.map((l) => `[${l}]`).join("")}`);
 
@@ -246,19 +245,15 @@ function buildFfmpegArgs(opts: {
       const zoomLabel = `vzo${i}`;
       const nextBase  = `vbase${i + 1}`;
 
-      // zoom-in: crop center 2/3 → scale back to full (1.5× magnification)
-      // zoom-out: scale down to 2/3 → pad back to full with black bars
       const cropScale = z.type === "zoom-in"
         ? "crop=2*iw/3:2*ih/3:iw/6:ih/6,scale=3*iw/2:3*ih/2"
         : "scale=2*iw/3:2*ih/3,pad=3*iw/2:3*ih/2:iw/4:ih/4:black";
 
-      // Trim effect frames, apply crop/scale, then shift PTS back to output time oS
       fp.push(
         `[vzs${i}]trim=start=${z.oS.toFixed(3)}:end=${z.oE.toFixed(3)},` +
         `${cropScale},` +
         `setpts=PTS-STARTPTS+${z.oS.toFixed(3)}/TB[${zoomLabel}]`
       );
-      // Overlay the zoomed frames over the base stream during [oS, oE]
       fp.push(
         `[${baseLabel}][${zoomLabel}]overlay=0:0:enable='between(t,${z.oS.toFixed(3)},${z.oE.toFixed(3)})'[${nextBase}]`
       );
@@ -309,14 +304,13 @@ router.post(
     let effects: EffInput[] = [];
     try { effects = JSON.parse(req.body.effects ?? "[]"); } catch { /* ignore */ }
 
+    // With disk storage, the uploaded file is already on disk
+    const inputPath  = req.file.path;
     const id         = crypto.randomUUID();
-    const ext        = path.extname(req.file.originalname) || ".mp4";
-    const inputPath  = path.join(os.tmpdir(), `hs-in-${id}${ext}`);
     const outputPath = path.join(os.tmpdir(), `hs-out-${id}.mp4`);
     let srtPath: string | null = null;
 
     try {
-      await fs.writeFile(inputPath, req.file.buffer);
       emitProgress(jobId, 2);
 
       if (burnSubs && subtitles.length > 0) {
@@ -362,6 +356,7 @@ router.post(
       emitProgress(jobId, 99);
       emitDone(jobId);
 
+      const ext       = path.extname(req.file.originalname) || ".mp4";
       const baseName  = path.basename(req.file.originalname, ext);
       const outputBuf = await fs.readFile(outputPath);
       res.setHeader("Content-Type", "video/mp4");

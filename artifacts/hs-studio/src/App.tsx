@@ -43,6 +43,7 @@ import type {
   ChatMessage,
   VideoMetadata,
   CommandType,
+  Cut,
 } from "@/types";
 
 const CREDIT_COST = 5;
@@ -182,6 +183,7 @@ function LeftPanel({
   burnSubs,
   onBurnSubsChange,
   exportProgress,
+  exportPhaseLabel,
   isVideoLoading,
   onSave,
   onLoad,
@@ -198,6 +200,7 @@ function LeftPanel({
   burnSubs: boolean;
   onBurnSubsChange: (v: boolean) => void;
   exportProgress: number | null;
+  exportPhaseLabel: string;
   isVideoLoading: boolean;
   onSave: () => void;
   onLoad: () => void;
@@ -398,7 +401,7 @@ function LeftPanel({
             {isExporting ? (
               <>
                 <div className="w-3 h-3 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                {exportProgress != null ? `${exportProgress}%` : "Exporting…"}
+                {exportProgress != null ? `${exportPhaseLabel} ${exportProgress}%` : exportPhaseLabel}
               </>
             ) : (
               <>
@@ -492,6 +495,7 @@ function CenterPanel({
   duration,
   subtitles,
   effects,
+  cuts,
   trim,
   zoom,
   effectPreviewStyle,
@@ -505,6 +509,7 @@ function CenterPanel({
   onZoomChange,
   onSubtitleMove,
   onEffectMove,
+  onCutDelete,
   videoRef,
 }: {
   videoUrl: string | null;
@@ -512,6 +517,7 @@ function CenterPanel({
   duration: number;
   subtitles: Subtitle[];
   effects: Effect[];
+  cuts: Cut[];
   trim: TrimState;
   zoom: number;
   effectPreviewStyle: { transform: string; opacity: number };
@@ -525,6 +531,7 @@ function CenterPanel({
   onZoomChange: (z: number) => void;
   onSubtitleMove?: (id: string, s: number, e: number) => void;
   onEffectMove?: (id: string, s: number, e: number) => void;
+  onCutDelete?: (index: number) => void;
   videoRef: React.RefObject<HTMLVideoElement | null>;
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -665,6 +672,7 @@ function CenterPanel({
         currentTime={currentTime}
         subtitles={subtitles}
         effects={effects}
+        cuts={cuts}
         trim={trim}
         zoom={zoom}
         onSeek={seek}
@@ -675,6 +683,7 @@ function CenterPanel({
         onZoomChange={onZoomChange}
         onSubtitleMove={onSubtitleMove}
         onEffectMove={onEffectMove}
+        onCutDelete={onCutDelete}
       />
     </main>
   );
@@ -1138,6 +1147,7 @@ export default function App() {
   const [isSending, setIsSending] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
+  const [exportPhaseLabel, setExportPhaseLabel] = useState("Exporting…");
   const [burnSubs, setBurnSubs] = useState(true);
   const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -1225,15 +1235,38 @@ export default function App() {
         try {
           const form = new FormData();
           form.append("video", videoFile);
-          const resp = await fetch("/api/editor/transcribe", {
-            method: "POST",
-            body: form,
+
+          // XHR upload so we can show progress while the file uploads
+          const xhrResult = await new Promise<{ ok: boolean; json: unknown }>((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", "/api/editor/transcribe");
+            xhr.responseType = "text";
+            xhr.upload.onprogress = (e) => {
+              if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                setProject((p) => ({
+                  ...p,
+                  messages: p.messages.map((m) =>
+                    m.id === pendingId
+                      ? { ...m, content: pct < 100 ? `Uploading video… ${pct}%` : "Transcribing audio… this may take a moment." }
+                      : m
+                  ),
+                }));
+              }
+            };
+            xhr.onload = () => {
+              const json = (() => { try { return JSON.parse(xhr.responseText); } catch { return {}; } })();
+              resolve({ ok: xhr.status >= 200 && xhr.status < 300, json });
+            };
+            xhr.onerror = () => reject(new Error("Network error during upload"));
+            xhr.send(form);
           });
-          if (!resp.ok) {
-            const errBody = (await resp.json()) as { error: string };
+
+          if (!xhrResult.ok) {
+            const errBody = xhrResult.json as { error?: string };
             throw new Error(errBody.error ?? "Transcription failed");
           }
-          const data = (await resp.json()) as {
+          const data = xhrResult.json as {
             subtitles: Array<{ id: string; text: string; start: number; end: number }>;
           };
 
@@ -1257,18 +1290,13 @@ export default function App() {
           const errMsg: ChatMessage = {
             id: crypto.randomUUID(),
             role: "assistant",
-            content: `Transcription failed: ${err instanceof Error ? err.message : "Unknown error"}. Using mock subtitles instead.`,
+            content: `Transcription failed: ${err instanceof Error ? err.message : "Unknown error"}. Check that OPENAI_API_KEY is configured on the server.`,
             command: "subtitle",
             createdAt: new Date().toISOString(),
           };
-          const mockSubs = result.subtitles?.map((s) => ({
-            ...s,
-            id: crypto.randomUUID(),
-          })) ?? [];
           setProject((p) => ({
             ...p,
             messages: [...p.messages.filter((m) => m.id !== pendingId), errMsg],
-            subtitles: [...p.subtitles, ...mockSubs],
             credits: Math.max(0, p.credits - CREDIT_COST),
           }));
         } finally {
@@ -1313,14 +1341,19 @@ export default function App() {
     if (!videoFile) return;
     setIsExporting(true);
     setExportProgress(0);
+    setExportPhaseLabel("Uploading…");
 
     const jobId = crypto.randomUUID();
 
+    // SSE for FFmpeg render progress (polls up to 5 min for job creation after upload)
     const sse = new EventSource(`/api/editor/export/progress/${jobId}`);
     sse.onmessage = (ev: MessageEvent) => {
       try {
         const data = JSON.parse(ev.data as string) as { progress?: number; done?: boolean };
-        if (data.progress !== undefined) setExportProgress(data.progress);
+        if (data.progress !== undefined) {
+          setExportPhaseLabel("Rendering…");
+          setExportProgress(data.progress);
+        }
         if (data.done) sse.close();
       } catch { /* ignore parse errors */ }
     };
@@ -1338,18 +1371,46 @@ export default function App() {
       form.append("cuts", JSON.stringify(project.cuts ?? []));
       form.append("effects", JSON.stringify(project.effects ?? []));
 
-      const resp = await fetch("/api/editor/export", { method: "POST", body: form });
+      // XHR upload so we can show upload progress before FFmpeg begins
+      const xhrResult = await new Promise<{ ok: boolean; blob?: Blob; error?: string }>((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/editor/export");
+        xhr.responseType = "blob";
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setExportProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+        xhr.upload.onload = () => {
+          setExportPhaseLabel("Rendering…");
+          setExportProgress(0);
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve({ ok: true, blob: xhr.response as Blob });
+          } else {
+            const reader = new FileReader();
+            reader.onload = () => {
+              try {
+                const body = JSON.parse(reader.result as string) as { error?: string };
+                resolve({ ok: false, error: body.error ?? `Server error ${xhr.status}` });
+              } catch {
+                resolve({ ok: false, error: `Server error ${xhr.status}` });
+              }
+            };
+            reader.readAsText(xhr.response as Blob);
+          }
+        };
+        xhr.onerror = () => resolve({ ok: false, error: "Network error during upload" });
+        xhr.send(form);
+      });
 
-      if (!resp.ok) {
-        const body = await resp.json() as { error?: string };
-        throw new Error(body.error ?? `Server error ${resp.status}`);
-      }
+      if (!xhrResult.ok) throw new Error(xhrResult.error ?? "Export failed");
 
       setExportProgress(100);
-      const blob = await resp.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
+      const url = URL.createObjectURL(xhrResult.blob!);
+      const a   = document.createElement("a");
+      a.href    = url;
       a.download = `${project.name.replace(/[^a-z0-9_\-]/gi, "_")}-export.mp4`;
       document.body.appendChild(a);
       a.click();
@@ -1362,8 +1423,9 @@ export default function App() {
       sse.close();
       setIsExporting(false);
       setExportProgress(null);
+      setExportPhaseLabel("Exporting…");
     }
-  }, [videoFile, project.trim, project.subtitles, project.name, duration, burnSubs]);
+  }, [videoFile, project.trim, project.subtitles, project.cuts, project.effects, project.name, duration, burnSubs]);
 
   const handleSubtitleMove = useCallback(
     (id: string, newStart: number, newEnd: number) => {
@@ -1384,6 +1446,16 @@ export default function App() {
         effects: p.effects.map((e) =>
           e.id === id ? { ...e, start: newStart, end: newEnd } : e
         ),
+      }));
+    },
+    [setProject]
+  );
+
+  const handleCutDelete = useCallback(
+    (index: number) => {
+      setProject((p) => ({
+        ...p,
+        cuts: (p.cuts ?? []).filter((_, i) => i !== index),
       }));
     },
     [setProject]
@@ -1412,6 +1484,7 @@ export default function App() {
         burnSubs={burnSubs}
         onBurnSubsChange={setBurnSubs}
         exportProgress={exportProgress}
+        exportPhaseLabel={exportPhaseLabel}
         isVideoLoading={isVideoLoading}
         onSave={handleSave}
         onLoad={handleLoad}
@@ -1425,6 +1498,7 @@ export default function App() {
         duration={duration}
         subtitles={project.subtitles}
         effects={project.effects}
+        cuts={project.cuts ?? []}
         trim={project.trim}
         zoom={project.timelineZoom}
         effectPreviewStyle={effectPreviewStyle}
@@ -1444,6 +1518,7 @@ export default function App() {
         onZoomChange={setZoom}
         onSubtitleMove={handleSubtitleMove}
         onEffectMove={handleEffectMove}
+        onCutDelete={handleCutDelete}
       />
       <RightPanel
         credits={project.credits}

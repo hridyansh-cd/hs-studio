@@ -9,9 +9,15 @@ import crypto from "crypto";
 
 const router = Router();
 
-// Accept large videos — we extract + compress audio server-side before Whisper
+// Disk storage — avoids loading the entire video into RAM
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, os.tmpdir()),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname) || ".mp4";
+      cb(null, `hs-upload-${crypto.randomUUID()}${ext}`);
+    },
+  }),
   limits: { fileSize: 500 * 1024 * 1024 },
 });
 
@@ -64,16 +70,14 @@ router.post(
       return;
     }
 
-    const id = crypto.randomUUID();
-    const ext = path.extname(req.file.originalname) || ".mp4";
-    const videoPath = path.join(os.tmpdir(), `hs-vid-${id}${ext}`);
+    // With disk storage, the file is already on disk at req.file.path
+    const videoPath = req.file.path;
+    const id        = crypto.randomUUID();
     const audioPath = path.join(os.tmpdir(), `hs-audio-${id}.mp3`);
     const chunkDir  = path.join(os.tmpdir(), `hs-chunks-${id}`);
     const tempFiles: string[] = [videoPath, audioPath];
 
     try {
-      await fs.writeFile(videoPath, req.file.buffer);
-
       // Extract compact mono audio — 32 kbps ≈ 14 MB / hour
       await runFfmpeg([
         "-i", videoPath,
