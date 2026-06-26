@@ -33,7 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { Timeline } from "@/components/Timeline";
-import { processCommand, COMMAND_COLORS } from "@/lib/commands";
+import { COMMAND_COLORS } from "@/lib/commands";
 import { useProject } from "@/hooks/useProject";
 import { useEffectPreview } from "@/hooks/useEffectPreview";
 import { useAudioWaveform } from "@/hooks/useAudioWaveform";
@@ -1209,140 +1209,186 @@ export default function App() {
         content: text,
         createdAt: new Date().toISOString(),
       };
+
+      // Snapshot messages before state update for GPT history
+      const historySnapshot = project.messages;
+
       setProject((p) => ({ ...p, messages: [...p.messages, userMsg] }));
       setIsSending(true);
 
-      const result = processCommand(text, currentTime, duration);
-
-      // Subtitle command with no video — guide the user
-      if (result.command === "subtitle" && !videoFile) {
-        const noVideoMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "Please upload a video first — subtitles are generated from the video's audio using Whisper speech recognition.",
-          command: "subtitle",
-          createdAt: new Date().toISOString(),
-        };
-        setProject((p) => ({ ...p, messages: [...p.messages, noVideoMsg] }));
-        setIsSending(false);
-        return;
-      }
-
-      // Real transcription via Whisper — only when video file is loaded
-      if (result.command === "subtitle" && videoFile) {
-        const pendingId = crypto.randomUUID();
-        const pendingMsg: ChatMessage = {
-          id: pendingId,
-          role: "assistant",
-          content: "Transcribing audio… this may take a moment.",
-          command: "subtitle",
-          createdAt: new Date().toISOString(),
-        };
-        setProject((p) => ({ ...p, messages: [...p.messages, pendingMsg] }));
-
-        try {
-          const form = new FormData();
-          form.append("video", videoFile);
-
-          // XHR upload so we can show progress while the file uploads
-          const xhrResult = await new Promise<{ ok: boolean; json: unknown }>((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open("POST", "/api/editor/transcribe");
-            xhr.responseType = "text";
-            xhr.upload.onprogress = (e) => {
-              if (e.lengthComputable) {
-                const pct = Math.round((e.loaded / e.total) * 100);
-                setProject((p) => ({
-                  ...p,
-                  messages: p.messages.map((m) =>
-                    m.id === pendingId
-                      ? { ...m, content: pct < 100 ? `Uploading video… ${pct}%` : "Transcribing audio… this may take a moment." }
-                      : m
-                  ),
-                }));
-              }
-            };
-            xhr.onload = () => {
-              const json = (() => { try { return JSON.parse(xhr.responseText); } catch { return {}; } })();
-              resolve({ ok: xhr.status >= 200 && xhr.status < 300, json });
-            };
-            xhr.onerror = () => reject(new Error("Network error during upload"));
-            xhr.send(form);
-          });
-
-          if (!xhrResult.ok) {
-            const errBody = xhrResult.json as { error?: string };
-            throw new Error(errBody.error ?? "Transcription failed");
-          }
-          const data = xhrResult.json as {
-            subtitles: Array<{ id: string; text: string; start: number; end: number }>;
-          };
-
-          const doneMsg: ChatMessage = {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: `Transcription complete — ${data.subtitles.length} subtitle${data.subtitles.length !== 1 ? "s" : ""} generated. Edit them in the Subtitles tab.`,
-            command: "subtitle",
+      const pendingId = crypto.randomUUID();
+      setProject((p) => ({
+        ...p,
+        messages: [
+          ...p.messages,
+          {
+            id: pendingId,
+            role: "assistant" as const,
+            content: "Thinking…",
             createdAt: new Date().toISOString(),
-          };
-          setProject((p) => ({
-            ...p,
-            messages: [...p.messages.filter((m) => m.id !== pendingId), doneMsg],
-            subtitles: [
-              ...p.subtitles,
-              ...data.subtitles.map((s) => ({ ...s, id: crypto.randomUUID() })),
+          },
+        ],
+      }));
+
+      try {
+        const resp = await fetch("/api/editor/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: [
+              ...historySnapshot.map((m) => ({ role: m.role, content: m.content })),
+              { role: "user", content: text },
             ],
-            credits: Math.max(0, p.credits - CREDIT_COST),
-          }));
-        } catch (err: unknown) {
-          const errMsg: ChatMessage = {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: `Transcription failed: ${err instanceof Error ? err.message : "Unknown error"}. Check that OPENAI_API_KEY is configured on the server.`,
-            command: "subtitle",
-            createdAt: new Date().toISOString(),
-          };
+            currentTime,
+            duration,
+            hasVideo: !!videoFile,
+            effects: project.effects,
+            cuts: project.cuts ?? [],
+            subtitleCount: project.subtitles.length,
+          }),
+        });
+
+        if (!resp.ok) {
+          const errBody = (await resp.json()) as { error?: string };
+          throw new Error(errBody.error ?? `Server error ${resp.status}`);
+        }
+
+        const result = (await resp.json()) as {
+          message: string;
+          command: "cut" | "zoom" | "subtitle" | null;
+          cut: { start: number; end: number } | null;
+          effect: { type: string; label: string; start: number; end: number } | null;
+        };
+
+        // Subtitle command — trigger Whisper transcription
+        if (result.command === "subtitle") {
+          if (!videoFile) {
+            setProject((p) => ({
+              ...p,
+              messages: p.messages.map((m) =>
+                m.id === pendingId ? { ...m, content: result.message, command: "subtitle" as const } : m
+              ),
+            }));
+            setIsSending(false);
+            return;
+          }
+
           setProject((p) => ({
             ...p,
-            messages: [...p.messages.filter((m) => m.id !== pendingId), errMsg],
-            credits: Math.max(0, p.credits - CREDIT_COST),
+            messages: p.messages.map((m) =>
+              m.id === pendingId
+                ? { ...m, content: "Transcribing audio… this may take a moment.", command: "subtitle" as const }
+                : m
+            ),
           }));
-        } finally {
-          setIsSending(false);
-        }
-        return;
-      }
 
-      // All other commands — client-side logic with a short artificial delay
-      setTimeout(() => {
-        const assistantMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: result.message,
-          command: result.command ?? undefined,
-          createdAt: new Date().toISOString(),
-        };
+          try {
+            const form = new FormData();
+            form.append("video", videoFile);
+
+            const xhrResult = await new Promise<{ ok: boolean; json: unknown }>((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open("POST", "/api/editor/transcribe");
+              xhr.responseType = "text";
+              xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                  const pct = Math.round((e.loaded / e.total) * 100);
+                  setProject((p) => ({
+                    ...p,
+                    messages: p.messages.map((m) =>
+                      m.id === pendingId
+                        ? { ...m, content: pct < 100 ? `Uploading video… ${pct}%` : "Transcribing audio… this may take a moment." }
+                        : m
+                    ),
+                  }));
+                }
+              };
+              xhr.onload = () => {
+                const json = (() => { try { return JSON.parse(xhr.responseText); } catch { return {}; } })();
+                resolve({ ok: xhr.status >= 200 && xhr.status < 300, json });
+              };
+              xhr.onerror = () => reject(new Error("Network error during upload"));
+              xhr.send(form);
+            });
+
+            if (!xhrResult.ok) {
+              const errBody = xhrResult.json as { error?: string };
+              throw new Error(errBody.error ?? "Transcription failed");
+            }
+            const data = xhrResult.json as {
+              subtitles: Array<{ id: string; text: string; start: number; end: number }>;
+            };
+
+            const doneMsg: ChatMessage = {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: `Transcription complete — ${data.subtitles.length} subtitle${data.subtitles.length !== 1 ? "s" : ""} generated. Edit them in the Subtitles tab.`,
+              command: "subtitle",
+              createdAt: new Date().toISOString(),
+            };
+            setProject((p) => ({
+              ...p,
+              messages: [...p.messages.filter((m) => m.id !== pendingId), doneMsg],
+              subtitles: [
+                ...p.subtitles,
+                ...data.subtitles.map((s) => ({ ...s, id: crypto.randomUUID() })),
+              ],
+              credits: Math.max(0, p.credits - CREDIT_COST),
+            }));
+          } catch (err: unknown) {
+            const errMsg: ChatMessage = {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: `Transcription failed: ${err instanceof Error ? err.message : "Unknown error"}. Check that OPENAI_API_KEY is configured on the server.`,
+              command: "subtitle",
+              createdAt: new Date().toISOString(),
+            };
+            setProject((p) => ({
+              ...p,
+              messages: [...p.messages.filter((m) => m.id !== pendingId), errMsg],
+              credits: Math.max(0, p.credits - CREDIT_COST),
+            }));
+          } finally {
+            setIsSending(false);
+          }
+          return;
+        }
+
+        // Apply GPT-chosen action and show the reply
         setProject((p) => {
-          const next = { ...p, messages: [...p.messages, assistantMsg] };
+          const next = {
+            ...p,
+            messages: p.messages.map((m) =>
+              m.id === pendingId
+                ? { ...m, content: result.message, command: result.command ?? undefined }
+                : m
+            ),
+          };
           if (result.command) next.credits = Math.max(0, p.credits - CREDIT_COST);
-          if (result.effect) {
-            next.effects = [...p.effects, { ...result.effect, id: crypto.randomUUID() }];
-          }
-          if (result.subtitles) {
-            next.subtitles = [
-              ...p.subtitles,
-              ...result.subtitles.map((s) => ({ ...s, id: crypto.randomUUID() })),
-            ];
-          }
           if (result.cut) {
             next.cuts = [...(p.cuts ?? []), result.cut];
           }
+          if (result.effect) {
+            next.effects = [
+              ...p.effects,
+              { ...result.effect, id: crypto.randomUUID() } as Effect,
+            ];
+          }
           return next;
         });
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : "AI request failed";
+        setProject((p) => ({
+          ...p,
+          messages: p.messages.map((m) =>
+            m.id === pendingId ? { ...m, content: `Error: ${errMsg}` } : m
+          ),
+        }));
+      } finally {
         setIsSending(false);
-      }, 700 + Math.random() * 300);
+      }
     },
-    [currentTime, duration, setProject, videoFile]
+    [currentTime, duration, project, setProject, videoFile]
   );
 
   const handleExport = useCallback(async (res: Resolution) => {
