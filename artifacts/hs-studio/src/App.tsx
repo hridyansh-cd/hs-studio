@@ -1325,7 +1325,7 @@ export default function App() {
           effect: { type: string; label: string; start: number; end: number } | null;
         };
 
-        // Subtitle command — trigger Whisper transcription
+        // Subtitle command — trigger Gladia transcription
         if (result.command === "subtitle") {
           if (!videoFile) {
             setProject((p) => ({

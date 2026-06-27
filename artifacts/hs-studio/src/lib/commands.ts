@@ -53,7 +53,7 @@ export function processCommand(
 
     case "subtitle": {
       return {
-        message: `Please upload a video first — subtitles are generated from the video's audio using speech recognition (Whisper). Once a video is loaded, type "subtitle" again to start transcription.`,
+        message: `Please upload a video first — subtitles are generated from the video's audio using Gladia AI. Once a video is loaded, type "subtitle" again to start transcription.`,
         command: "subtitle",
       };
     }
