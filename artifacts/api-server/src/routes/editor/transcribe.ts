@@ -134,11 +134,18 @@ router.post(
     const audioPath = path.join(os.tmpdir(), `hs-audio-${id}.mp3`);
     const tempFiles: string[] = [videoPath, audioPath];
 
+    // ── Read optional language hint ───────────────────────────────────────────
+    // Multer populates req.body for non-file fields in multipart uploads
+    const language = typeof req.body?.language === "string" && req.body.language.trim()
+      ? req.body.language.trim()
+      : null;
+
     try {
       // ── 1. Extract audio ──────────────────────────────────────────────────
+      // 16 kHz mono is optimal for ASR; 96 kbps gives cleaner signal than 64 kbps
       await runFfmpeg([
         "-i",  videoPath,
-        "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k",
+        "-vn", "-ac", "1", "-ar", "16000", "-b:a", "96k",
         audioPath,
       ]);
 
@@ -170,8 +177,12 @@ router.post(
         headers: { "x-gladia-key": apiKey, "Content-Type": "application/json" },
         body: JSON.stringify({
           audio_url,
-          diarization:    false,
-          language_config: { languages: [], code_switching: true },
+          diarization: false,
+          // When language is specified, locking it in dramatically improves accuracy.
+          // Without it, Gladia auto-detects but may switch mid-video.
+          language_config: language
+            ? { languages: [language] }
+            : { languages: [], code_switching: true },
         }),
       });
 

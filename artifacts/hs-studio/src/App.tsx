@@ -56,6 +56,26 @@ const CREDIT_COST = 5;
 const EXPORT_RESOLUTIONS = ["720p", "1080p", "4K"] as const;
 type Resolution = (typeof EXPORT_RESOLUTIONS)[number];
 
+const LANGUAGES = [
+  { code: "en", label: "English" },
+  { code: "es", label: "Español" },
+  { code: "fr", label: "Français" },
+  { code: "de", label: "Deutsch" },
+  { code: "it", label: "Italiano" },
+  { code: "pt", label: "Português" },
+  { code: "zh", label: "中文" },
+  { code: "ja", label: "日本語" },
+  { code: "ko", label: "한국어" },
+  { code: "ar", label: "العربية" },
+  { code: "hi", label: "हिंदी" },
+  { code: "ru", label: "Русский" },
+  { code: "nl", label: "Nederlands" },
+  { code: "tr", label: "Türkçe" },
+  { code: "pl", label: "Polski" },
+  { code: "sv", label: "Svenska" },
+  { code: "",   label: "Auto-detect" },
+] as const;
+
 // ─── Subtitle file generators ───────────────────────────────────────────────────
 
 function fmtSrtTime(s: number): string {
@@ -913,6 +933,8 @@ function RightPanel({
   onSeek,
   onDownloadSrt,
   onDownloadVtt,
+  languagePending,
+  onLanguageSelect,
 }: {
   credits: number;
   messages: ChatMessage[];
@@ -930,6 +952,8 @@ function RightPanel({
   onSeek: (t: number) => void;
   onDownloadSrt: () => void;
   onDownloadVtt: () => void;
+  languagePending: boolean;
+  onLanguageSelect: (code: string, label: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = useState("");
@@ -1094,6 +1118,29 @@ function RightPanel({
                 ))}
               </div>
             )}
+            {languagePending && (
+              <div className="rounded-xl border border-primary/25 bg-primary/5 p-3 space-y-2.5">
+                <p className="text-[11px] font-semibold text-primary/80 tracking-wide uppercase">
+                  Select language
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {LANGUAGES.map((lang) => (
+                    <button
+                      key={lang.code || "auto"}
+                      onClick={() => onLanguageSelect(lang.code, lang.label)}
+                      className={cn(
+                        "text-[10px] font-medium px-2.5 py-1 rounded-full border transition-all hover:scale-105 active:scale-95",
+                        lang.code === ""
+                          ? "border-muted-foreground/40 text-muted-foreground hover:border-primary/50 hover:text-primary hover:bg-primary/10"
+                          : "border-border/60 text-foreground/80 hover:border-primary/50 hover:text-primary hover:bg-primary/10"
+                      )}
+                    >
+                      {lang.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Input */}
@@ -1256,6 +1303,7 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isSending, setIsSending] = useState(false);
+  const [subtitlePending, setSubtitlePending] = useState<{ pendingId: string; file: File } | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [exportPhaseLabel, setExportPhaseLabel] = useState("Exporting…");
@@ -1317,6 +1365,107 @@ export default function App() {
     [setTrim]
   );
 
+  const handleStartTranscription = useCallback(
+    async (pendingId: string, file: File, langCode: string, langLabel: string) => {
+      setSubtitlePending(null);
+      setIsSending(true);
+
+      const progressLabel = langCode
+        ? `Transcribing in ${langLabel}… this may take a moment.`
+        : "Transcribing audio… this may take a moment.";
+
+      setProject((p) => ({
+        ...p,
+        messages: p.messages.map((m) =>
+          m.id === pendingId ? { ...m, content: progressLabel } : m
+        ),
+      }));
+
+      try {
+        const form = new FormData();
+        form.append("video", file);
+        if (langCode) form.append("language", langCode);
+
+        const xhrResult = await new Promise<{ ok: boolean; json: unknown }>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", "/api/editor/transcribe");
+          xhr.responseType = "text";
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.round((e.loaded / e.total) * 100);
+              setProject((p) => ({
+                ...p,
+                messages: p.messages.map((m) =>
+                  m.id === pendingId
+                    ? { ...m, content: pct < 100 ? `Uploading video… ${pct}%` : progressLabel }
+                    : m
+                ),
+              }));
+            }
+          };
+          xhr.onload = () => {
+            const json = (() => {
+              try { return JSON.parse(xhr.responseText); } catch { return {}; }
+            })();
+            resolve({ ok: xhr.status >= 200 && xhr.status < 300, json });
+          };
+          xhr.onerror = () => reject(new Error("Network error during upload"));
+          xhr.send(form);
+        });
+
+        if (!xhrResult.ok) {
+          const errBody = xhrResult.json as { error?: string };
+          throw new Error(errBody.error ?? "Transcription failed");
+        }
+        const data = xhrResult.json as {
+          subtitles: Array<{ id: string; text: string; start: number; end: number }>;
+        };
+
+        const doneMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `Done — ${data.subtitles.length} subtitle${data.subtitles.length !== 1 ? "s" : ""} generated${langCode ? ` (${langLabel})` : ""}. Switch to the Subtitles tab to edit them.`,
+          command: "subtitle",
+          createdAt: new Date().toISOString(),
+        };
+        setProject((p) => ({
+          ...p,
+          messages: [...p.messages.filter((m) => m.id !== pendingId), doneMsg],
+          subtitles: [
+            ...p.subtitles,
+            ...data.subtitles.map((s) => ({ ...s, id: crypto.randomUUID() })),
+          ],
+          credits: Math.max(0, p.credits - CREDIT_COST),
+        }));
+      } catch (err: unknown) {
+        const errMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: `Transcription failed: ${err instanceof Error ? err.message : "Unknown error"}. Make sure a video is loaded and try again.`,
+          command: "subtitle",
+          createdAt: new Date().toISOString(),
+        };
+        setProject((p) => ({
+          ...p,
+          messages: [...p.messages.filter((m) => m.id !== pendingId), errMsg],
+          credits: Math.max(0, p.credits - CREDIT_COST),
+        }));
+      } finally {
+        setIsSending(false);
+      }
+    },
+    [setProject, setIsSending, setSubtitlePending]
+  );
+
+  const handleLanguageSelected = useCallback(
+    (code: string, label: string) => {
+      if (!subtitlePending) return;
+      checkpoint();
+      void handleStartTranscription(subtitlePending.pendingId, subtitlePending.file, code, label);
+    },
+    [subtitlePending, checkpoint, handleStartTranscription]
+  );
+
   const handleSend = useCallback(
     async (text: string) => {
       const userMsg: ChatMessage = {
@@ -1376,7 +1525,7 @@ export default function App() {
           effect: { type: string; label: string; start: number; end: number } | null;
         };
 
-        // Subtitle command — trigger Gladia transcription
+        // Subtitle command — ask for language, then trigger Gladia
         if (result.command === "subtitle") {
           if (!videoFile) {
             setProject((p) => ({
@@ -1389,84 +1538,17 @@ export default function App() {
             return;
           }
 
+          // Show language picker — transcription starts after selection
           setProject((p) => ({
             ...p,
             messages: p.messages.map((m) =>
               m.id === pendingId
-                ? { ...m, content: "Transcribing audio… this may take a moment.", command: "subtitle" as const }
+                ? { ...m, content: "What language is this video in? Picking the right language gives much more accurate subtitles.", command: "subtitle" as const }
                 : m
             ),
           }));
-
-          try {
-            const form = new FormData();
-            form.append("video", videoFile);
-
-            const xhrResult = await new Promise<{ ok: boolean; json: unknown }>((resolve, reject) => {
-              const xhr = new XMLHttpRequest();
-              xhr.open("POST", "/api/editor/transcribe");
-              xhr.responseType = "text";
-              xhr.upload.onprogress = (e) => {
-                if (e.lengthComputable) {
-                  const pct = Math.round((e.loaded / e.total) * 100);
-                  setProject((p) => ({
-                    ...p,
-                    messages: p.messages.map((m) =>
-                      m.id === pendingId
-                        ? { ...m, content: pct < 100 ? `Uploading video… ${pct}%` : "Transcribing audio… this may take a moment." }
-                        : m
-                    ),
-                  }));
-                }
-              };
-              xhr.onload = () => {
-                const json = (() => { try { return JSON.parse(xhr.responseText); } catch { return {}; } })();
-                resolve({ ok: xhr.status >= 200 && xhr.status < 300, json });
-              };
-              xhr.onerror = () => reject(new Error("Network error during upload"));
-              xhr.send(form);
-            });
-
-            if (!xhrResult.ok) {
-              const errBody = xhrResult.json as { error?: string };
-              throw new Error(errBody.error ?? "Transcription failed");
-            }
-            const data = xhrResult.json as {
-              subtitles: Array<{ id: string; text: string; start: number; end: number }>;
-            };
-
-            const doneMsg: ChatMessage = {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: `Transcription complete — ${data.subtitles.length} subtitle${data.subtitles.length !== 1 ? "s" : ""} generated. Edit them in the Subtitles tab.`,
-              command: "subtitle",
-              createdAt: new Date().toISOString(),
-            };
-            setProject((p) => ({
-              ...p,
-              messages: [...p.messages.filter((m) => m.id !== pendingId), doneMsg],
-              subtitles: [
-                ...p.subtitles,
-                ...data.subtitles.map((s) => ({ ...s, id: crypto.randomUUID() })),
-              ],
-              credits: Math.max(0, p.credits - CREDIT_COST),
-            }));
-          } catch (err: unknown) {
-            const errMsg: ChatMessage = {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: `Transcription failed: ${err instanceof Error ? err.message : "Unknown error"}. Make sure a video is loaded and try again.`,
-              command: "subtitle",
-              createdAt: new Date().toISOString(),
-            };
-            setProject((p) => ({
-              ...p,
-              messages: [...p.messages.filter((m) => m.id !== pendingId), errMsg],
-              credits: Math.max(0, p.credits - CREDIT_COST),
-            }));
-          } finally {
-            setIsSending(false);
-          }
+          setSubtitlePending({ pendingId, file: videoFile });
+          setIsSending(false);
           return;
         }
 
@@ -1813,6 +1895,8 @@ export default function App() {
             subtitles: [...p.subtitles, { ...sub, id: crypto.randomUUID() }],
           }));
         }}
+        languagePending={subtitlePending !== null}
+        onLanguageSelect={handleLanguageSelected}
         onSeek={(t) => {
           setCurrentTime(t);
           if (videoRef.current) videoRef.current.currentTime = t;
