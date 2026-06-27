@@ -1,5 +1,5 @@
 import { Router } from "express";
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 
 const router = Router();
 
@@ -25,13 +25,13 @@ router.post("/editor/analyze-frame", async (req, res): Promise<void> => {
     return;
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    res.status(500).json({ error: "OPENAI_API_KEY is not configured on the server" });
+    res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server" });
     return;
   }
 
-  const client = new OpenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey });
 
   const prompt = `You are an expert video editor. Analyze this single video frame and return exactly 2-3 specific, actionable edit suggestions.
 
@@ -67,28 +67,30 @@ Rules:
 - Be specific about what you see — mention visual elements like faces, text, background, brightness, blur`;
 
   try {
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
         {
           role: "user",
-          content: [
-            { type: "text", text: prompt },
+          parts: [
+            { text: prompt },
             {
-              type: "image_url",
-              image_url: {
-                url: `data:image/jpeg;base64,${imageBase64}`,
-                detail: "low",
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: imageBase64,
               },
             },
           ],
         },
       ],
-      max_tokens: 700,
-      response_format: { type: "json_object" },
+      config: {
+        responseMimeType: "application/json",
+        maxOutputTokens: 1024,
+        temperature: 0.4,
+      },
     });
 
-    const raw = completion.choices[0]?.message?.content ?? '{"suggestions":[]}';
+    const raw = response.text ?? '{"suggestions":[]}';
     let parsed: { suggestions: unknown[] };
     try {
       parsed = JSON.parse(raw) as { suggestions: unknown[] };
@@ -97,10 +99,9 @@ Rules:
     }
 
     if (!Array.isArray(parsed.suggestions)) parsed.suggestions = [];
-
     res.json({ suggestions: parsed.suggestions.slice(0, 3) });
   } catch (err: unknown) {
-    req.log.error({ err }, "Frame analysis failed");
+    req.log.error({ err }, "Gemini frame analysis failed");
     const msg = err instanceof Error ? err.message : "Analysis failed";
     res.status(500).json({ error: msg });
   }

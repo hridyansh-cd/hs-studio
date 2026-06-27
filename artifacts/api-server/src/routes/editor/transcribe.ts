@@ -1,6 +1,6 @@
 import { Router } from "express";
+import { GoogleGenAI } from "@google/genai";
 import multer from "multer";
-import OpenAI, { toFile } from "openai";
 import { spawn } from "child_process";
 import { promises as fs } from "fs";
 import path from "path";
@@ -9,7 +9,6 @@ import crypto from "crypto";
 
 const router = Router();
 
-// Disk storage — avoids loading the entire video into RAM
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, os.tmpdir()),
@@ -21,37 +20,73 @@ const upload = multer({
   limits: { fileSize: 500 * 1024 * 1024 },
 });
 
-const WHISPER_LIMIT = 24 * 1024 * 1024; // 24 MB safe margin
-const CHUNK_SECS = 3600; // 1-hour chunks (≈ 14 MB at 32 kbps mono)
+// Gemini inline data limit: 8 MB — chunk audio conservatively
+const GEMINI_INLINE_LIMIT = 7 * 1024 * 1024; // 7 MB
+const CHUNK_SECS = 600; // 10-minute chunks at 32 kbps ≈ ~2.4 MB
 
-async function runFfmpeg(args: string[]): Promise<string> {
+async function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     const ff = spawn("ffmpeg", ["-y", ...args], { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     ff.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
     ff.on("close", (code) =>
-      code === 0 ? resolve(stderr) : reject(new Error(`FFmpeg exit ${code}: ${stderr.slice(-600)}`))
+      code === 0 ? resolve() : reject(new Error(`FFmpeg exit ${code}: ${stderr.slice(-600)}`))
     );
     ff.on("error", reject);
   });
 }
 
-async function transcribeAudio(
-  openai: OpenAI,
-  filePath: string
+async function transcribeChunk(
+  ai: GoogleGenAI,
+  filePath: string,
+  offsetSecs: number
 ): Promise<Array<{ text: string; start: number; end: number }>> {
   const buf = await fs.readFile(filePath);
-  const file = await toFile(buf, path.basename(filePath), { type: "audio/mpeg" });
-  const result = await openai.audio.transcriptions.create({
-    file,
-    model: "whisper-1",
-    response_format: "verbose_json",
-    timestamp_granularities: ["segment"],
+  const b64 = buf.toString("base64");
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: `Transcribe this audio accurately. Return ONLY valid JSON — no markdown, no backticks:
+{
+  "segments": [
+    { "text": "spoken words", "start": 0.0, "end": 2.5 }
+  ]
+}
+All timestamps are in seconds relative to the start of this audio clip.`,
+          },
+          {
+            inlineData: {
+              mimeType: "audio/mpeg",
+              data: b64,
+            },
+          },
+        ],
+      },
+    ],
+    config: {
+      responseMimeType: "application/json",
+      maxOutputTokens: 8192,
+      temperature: 0.1,
+    },
   });
-  return (result.segments ?? []).map((s) => ({
-    text: s.text.trim(),
-    start: s.start,
-    end: s.end,
+
+  const raw = response.text ?? '{"segments":[]}';
+  let parsed: { segments: Array<{ text: string; start: number; end: number }> };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    parsed = { segments: [] };
+  }
+
+  return (parsed.segments ?? []).map((s) => ({
+    text: s.text?.trim() ?? "",
+    start: (s.start ?? 0) + offsetSecs,
+    end: (s.end ?? 0) + offsetSecs,
   }));
 }
 
@@ -64,13 +99,13 @@ router.post(
       return;
     }
 
-    const apiKey = process.env["OPENAI_API_KEY"];
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      res.status(503).json({ error: "OPENAI_API_KEY is not configured on the server" });
+      res.status(503).json({ error: "GEMINI_API_KEY is not configured on the server" });
       return;
     }
 
-    // With disk storage, the file is already on disk at req.file.path
+    const ai = new GoogleGenAI({ apiKey });
     const videoPath = req.file.path;
     const id        = crypto.randomUUID();
     const audioPath = path.join(os.tmpdir(), `hs-audio-${id}.mp3`);
@@ -78,24 +113,20 @@ router.post(
     const tempFiles: string[] = [videoPath, audioPath];
 
     try {
-      // Extract compact mono audio — 32 kbps ≈ 14 MB / hour
+      // Extract compact mono audio — 32 kbps ≈ 2.4 MB / 10 min
       await runFfmpeg([
         "-i", videoPath,
         "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k",
         audioPath,
       ]);
 
-      const openai = new OpenAI({ apiKey });
       const { size: audioSize } = await fs.stat(audioPath);
-
       let allSegs: Array<{ text: string; start: number; end: number }> = [];
 
-      if (audioSize <= WHISPER_LIMIT) {
-        // ── Single-pass transcription ────────────────────────────────────
-        allSegs = await transcribeAudio(openai, audioPath);
+      if (audioSize <= GEMINI_INLINE_LIMIT) {
+        allSegs = await transcribeChunk(ai, audioPath, 0);
       } else {
-        // ── Chunked transcription for very long audio ────────────────────
-        req.log.info({ audioSize }, "Audio too large for Whisper — chunking");
+        req.log.info({ audioSize }, "Audio too large for single Gemini call — chunking");
         await fs.mkdir(chunkDir, { recursive: true });
         await runFfmpeg([
           "-i", audioPath,
@@ -111,12 +142,9 @@ router.post(
 
         for (let i = 0; i < chunkFiles.length; i++) {
           const chunkPath = path.join(chunkDir, chunkFiles[i]);
-          const offset = i * CHUNK_SECS;
-          const segs = await transcribeAudio(openai, chunkPath);
-          for (const seg of segs) {
-            allSegs.push({ text: seg.text, start: seg.start + offset, end: seg.end + offset });
-          }
           tempFiles.push(chunkPath);
+          const segs = await transcribeChunk(ai, chunkPath, i * CHUNK_SECS);
+          allSegs.push(...segs);
         }
 
         await fs.rm(chunkDir, { recursive: true, force: true }).catch(() => {});

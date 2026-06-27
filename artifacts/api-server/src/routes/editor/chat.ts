@@ -1,5 +1,5 @@
 import { Router } from "express";
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 
 const router = Router();
 
@@ -10,7 +10,7 @@ The user is editing a video on a multi-track timeline. You can understand natura
 ## Available actions
 - **cut**: remove a section of the video. Requires a start and end time in seconds.
 - **zoom**: add a zoom-in or zoom-out effect. Requires a start/end time and effect type.
-- **subtitle**: trigger speech-to-text transcription of the video's audio using Whisper AI.
+- **subtitle**: trigger speech-to-text transcription of the video's audio.
 - **null**: no action needed — just answer the question conversationally.
 
 ## Context you receive
@@ -65,54 +65,49 @@ router.post("/editor/chat", async (req, res): Promise<void> => {
     return;
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    res.status(500).json({ error: "OPENAI_API_KEY is not configured on the server" });
+    res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server" });
     return;
   }
 
-  const client = new OpenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey });
 
   const contextNote = `[Video context: currentTime=${currentTime.toFixed(1)}s, duration=${duration.toFixed(1)}s, hasVideo=${hasVideo}, existingEffects=${effects.length}, existingCuts=${cuts.length}, subtitleCount=${subtitleCount}]`;
 
-  const openaiMessages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...messages.slice(-12).map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.role === "user" ? `${contextNote}\n${m.content}` : m.content,
-    })),
-  ];
+  const contents = messages.slice(-12).map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.role === "user" ? `${contextNote}\n${m.content}` : m.content }],
+  }));
 
   try {
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o",
-      messages: openaiMessages,
-      temperature: 0.4,
-      max_tokens: 300,
-      response_format: { type: "json_object" },
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents,
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        responseMimeType: "application/json",
+        maxOutputTokens: 512,
+        temperature: 0.4,
+      },
     });
 
-    const raw = completion.choices[0]?.message?.content ?? "{}";
+    const raw = response.text ?? "{}";
     let action: ChatAction;
     try {
       action = JSON.parse(raw) as ChatAction;
     } catch {
-      action = {
-        message: raw,
-        command: null,
-        cut: null,
-        effect: null,
-      };
+      action = { message: raw, command: null, cut: null, effect: null };
     }
 
     if (!action.message) action.message = "Done!";
     if (!["cut", "zoom", "subtitle"].includes(action.command as string)) action.command = null;
-    if (action.command !== "cut")   action.cut    = null;
-    if (action.command !== "zoom")  action.effect = null;
+    if (action.command !== "cut")  action.cut    = null;
+    if (action.command !== "zoom") action.effect = null;
 
     res.json(action);
   } catch (err: unknown) {
-    req.log.error({ err }, "GPT chat failed");
+    req.log.error({ err }, "Gemini chat failed");
     const msg = err instanceof Error ? err.message : "AI request failed";
     res.status(500).json({ error: msg });
   }
