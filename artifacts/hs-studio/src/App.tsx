@@ -1404,7 +1404,7 @@ export default function App() {
             const errMsg: ChatMessage = {
               id: crypto.randomUUID(),
               role: "assistant",
-              content: `Transcription failed: ${err instanceof Error ? err.message : "Unknown error"}. Check that OPENAI_API_KEY is configured on the server.`,
+              content: `Transcription failed: ${err instanceof Error ? err.message : "Unknown error"}. Make sure a video is loaded and try again.`,
               command: "subtitle",
               createdAt: new Date().toISOString(),
             };
