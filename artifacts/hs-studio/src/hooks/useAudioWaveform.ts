@@ -16,6 +16,13 @@ export function useAudioWaveform(videoFile: File | null): {
       return;
     }
 
+    // Skip waveform for very large files (>80 MB) to prevent OOM on mobile
+    if (videoFile.size > 80 * 1024 * 1024) {
+      setBars([]);
+      setLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
     setBars([]);

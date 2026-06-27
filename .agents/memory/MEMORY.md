@@ -1,1 +1,2 @@
 - [HS Studio workflows](hs-studio-workflows.md) — manual workflows use explicit PORT env; artifact-managed ones are NOT_STARTED but that's fine.
+- [HS Studio bug fixes](hs-studio-bugfixes.md) — touch events, waveform OOM, project load safety, API keys all wired.

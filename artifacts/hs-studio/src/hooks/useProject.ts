@@ -107,7 +107,7 @@ export function useProject() {
   const loadSaved = useCallback((): boolean => {
     const p = loadProject();
     if (p) {
-      setProject(p);
+      setProject({ ...DEFAULT_PROJECT, ...p });
       return true;
     }
     return false;

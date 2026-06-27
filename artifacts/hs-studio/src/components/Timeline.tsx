@@ -145,8 +145,11 @@ export function Timeline({
   // ── Trim handle dragging ─────────────────────────────────────────────────
   useEffect(() => {
     if (!trimDrag) return;
-    const onMove = (e: MouseEvent) => {
-      const t = clientXToTime(e.clientX);
+    const getX = (e: MouseEvent | TouchEvent) =>
+      "touches" in e ? (e.touches[0]?.clientX ?? 0) : e.clientX;
+    const onMove = (e: MouseEvent | TouchEvent) => {
+      if ("touches" in e) e.preventDefault();
+      const t = clientXToTime(getX(e));
       if (trimDrag === "start") {
         onTrimChange({ start: Math.min(t, trim.end - 0.25), end: trim.end });
       } else {
@@ -154,11 +157,15 @@ export function Timeline({
       }
     };
     const onUp = () => setTrimDrag(null);
-    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mousemove", onMove as EventListener);
     window.addEventListener("mouseup",   onUp);
+    window.addEventListener("touchmove", onMove as EventListener, { passive: false });
+    window.addEventListener("touchend",  onUp);
     return () => {
-      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mousemove", onMove as EventListener);
       window.removeEventListener("mouseup",   onUp);
+      window.removeEventListener("touchmove", onMove as EventListener);
+      window.removeEventListener("touchend",  onUp);
     };
   }, [trimDrag, clientXToTime, onTrimChange, trim]);
 
@@ -166,11 +173,14 @@ export function Timeline({
   useEffect(() => {
     if (!segDrag) return;
     const segLen = segDrag.initEnd - segDrag.initStart;
+    const getX = (e: MouseEvent | TouchEvent) =>
+      "touches" in e ? (e.touches[0]?.clientX ?? segDrag.initX) : e.clientX;
 
-    const onMove = (e: MouseEvent) => {
-      const dx = e.clientX - segDrag.initX;
+    const onMove = (e: MouseEvent | TouchEvent) => {
+      if ("touches" in e) e.preventDefault();
+      const dx = getX(e) - segDrag.initX;
       if (Math.abs(dx) > 3) {
-        const dt      = (dx / totalPx) * duration;
+        const dt       = (dx / totalPx) * duration;
         const newStart = Math.max(0, Math.min(duration - segLen, segDrag.initStart + dt));
         const newEnd   = newStart + segLen;
         if (!segDrag.moved) setSegDrag((s) => s && { ...s, moved: true });
@@ -179,16 +189,20 @@ export function Timeline({
       }
     };
 
-    const onUp = (e: MouseEvent) => {
-      e.stopPropagation();
+    const onUp = (e: MouseEvent | TouchEvent) => {
+      if (!("touches" in e)) (e as MouseEvent).stopPropagation();
       setSegDrag(null);
     };
 
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup",   onUp,   true);
+    window.addEventListener("mousemove", onMove as EventListener);
+    window.addEventListener("mouseup",   onUp as EventListener, true);
+    window.addEventListener("touchmove", onMove as EventListener, { passive: false });
+    window.addEventListener("touchend",  onUp as EventListener);
     return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup",   onUp,   true);
+      window.removeEventListener("mousemove", onMove as EventListener);
+      window.removeEventListener("mouseup",   onUp as EventListener, true);
+      window.removeEventListener("touchmove", onMove as EventListener);
+      window.removeEventListener("touchend",  onUp as EventListener);
     };
   }, [segDrag, totalPx, duration, onSubtitleMove, onEffectMove]);
 
@@ -456,6 +470,7 @@ export function Timeline({
                 className="absolute top-1 bottom-1 w-4 flex items-center justify-center cursor-ew-resize z-20 group/h"
                 style={{ left: trimStartX - 8 }}
                 onMouseDown={(e) => { e.stopPropagation(); setTrimDrag("start"); }}
+                onTouchStart={(e) => { e.stopPropagation(); setTrimDrag("start"); }}
               >
                 <div className="w-1 h-full rounded-full bg-primary opacity-70 group-hover/h:opacity-100 transition-opacity" />
               </div>
@@ -464,6 +479,7 @@ export function Timeline({
                 className="absolute top-1 bottom-1 w-4 flex items-center justify-center cursor-ew-resize z-20 group/h"
                 style={{ left: trimEndX - 8 }}
                 onMouseDown={(e) => { e.stopPropagation(); setTrimDrag("end"); }}
+                onTouchStart={(e) => { e.stopPropagation(); setTrimDrag("end"); }}
               >
                 <div className="w-1 h-full rounded-full bg-primary opacity-70 group-hover/h:opacity-100 transition-opacity" />
               </div>
@@ -567,6 +583,11 @@ export function Timeline({
                         e.stopPropagation();
                         setSegDrag({ id: sub.id, type: "sub", initStart: sub.start, initEnd: sub.end, initX: e.clientX, moved: false });
                       }}
+                      onTouchStart={(e) => {
+                        e.stopPropagation();
+                        const touch = e.touches[0];
+                        setSegDrag({ id: sub.id, type: "sub", initStart: sub.start, initEnd: sub.end, initX: touch.clientX, moved: false });
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
                         if (!segDrag?.moved) onSubtitleClick(sub);
@@ -614,6 +635,11 @@ export function Timeline({
                       onMouseDown={(e) => {
                         e.stopPropagation();
                         setSegDrag({ id: fx.id, type: "fx", initStart: fx.start, initEnd: fx.end, initX: e.clientX, moved: false });
+                      }}
+                      onTouchStart={(e) => {
+                        e.stopPropagation();
+                        const touch = e.touches[0];
+                        setSegDrag({ id: fx.id, type: "fx", initStart: fx.start, initEnd: fx.end, initX: touch.clientX, moved: false });
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
