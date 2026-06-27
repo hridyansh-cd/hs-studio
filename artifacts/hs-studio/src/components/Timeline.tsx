@@ -72,6 +72,7 @@ interface TimelineProps {
   onSubtitleMove?: (id: string, newStart: number, newEnd: number) => void;
   onEffectMove?: (id: string, newStart: number, newEnd: number) => void;
   onCutDelete?: (index: number) => void;
+  onCheckpoint?: () => void;
 }
 
 function formatTime(t: number): string {
@@ -105,6 +106,7 @@ export function Timeline({
   onSubtitleMove,
   onEffectMove,
   onCutDelete,
+  onCheckpoint,
 }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [trimDrag, setTrimDrag] = useState<"start" | "end" | null>(null);
@@ -469,8 +471,8 @@ export function Timeline({
               <div
                 className="absolute top-1 bottom-1 w-4 flex items-center justify-center cursor-ew-resize z-20 group/h"
                 style={{ left: trimStartX - 8 }}
-                onMouseDown={(e) => { e.stopPropagation(); setTrimDrag("start"); }}
-                onTouchStart={(e) => { e.stopPropagation(); setTrimDrag("start"); }}
+                onMouseDown={(e) => { e.stopPropagation(); onCheckpoint?.(); setTrimDrag("start"); }}
+                onTouchStart={(e) => { e.stopPropagation(); onCheckpoint?.(); setTrimDrag("start"); }}
               >
                 <div className="w-1 h-full rounded-full bg-primary opacity-70 group-hover/h:opacity-100 transition-opacity" />
               </div>
@@ -478,8 +480,8 @@ export function Timeline({
               <div
                 className="absolute top-1 bottom-1 w-4 flex items-center justify-center cursor-ew-resize z-20 group/h"
                 style={{ left: trimEndX - 8 }}
-                onMouseDown={(e) => { e.stopPropagation(); setTrimDrag("end"); }}
-                onTouchStart={(e) => { e.stopPropagation(); setTrimDrag("end"); }}
+                onMouseDown={(e) => { e.stopPropagation(); onCheckpoint?.(); setTrimDrag("end"); }}
+                onTouchStart={(e) => { e.stopPropagation(); onCheckpoint?.(); setTrimDrag("end"); }}
               >
                 <div className="w-1 h-full rounded-full bg-primary opacity-70 group-hover/h:opacity-100 transition-opacity" />
               </div>
@@ -581,10 +583,12 @@ export function Timeline({
                       title={`${sub.text} — drag to move`}
                       onMouseDown={(e) => {
                         e.stopPropagation();
+                        onCheckpoint?.();
                         setSegDrag({ id: sub.id, type: "sub", initStart: sub.start, initEnd: sub.end, initX: e.clientX, moved: false });
                       }}
                       onTouchStart={(e) => {
                         e.stopPropagation();
+                        onCheckpoint?.();
                         const touch = e.touches[0];
                         setSegDrag({ id: sub.id, type: "sub", initStart: sub.start, initEnd: sub.end, initX: touch.clientX, moved: false });
                       }}
@@ -634,10 +638,12 @@ export function Timeline({
                       title={`${fx.label} — drag to move, click to edit`}
                       onMouseDown={(e) => {
                         e.stopPropagation();
+                        onCheckpoint?.();
                         setSegDrag({ id: fx.id, type: "fx", initStart: fx.start, initEnd: fx.end, initX: e.clientX, moved: false });
                       }}
                       onTouchStart={(e) => {
                         e.stopPropagation();
+                        onCheckpoint?.();
                         const touch = e.touches[0];
                         setSegDrag({ id: fx.id, type: "fx", initStart: fx.start, initEnd: fx.end, initX: touch.clientX, moved: false });
                       }}

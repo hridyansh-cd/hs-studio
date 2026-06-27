@@ -30,6 +30,8 @@ import {
   FileText,
   Camera,
   Wand2,
+  Undo2,
+  Redo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -193,6 +195,10 @@ function LeftPanel({
   onLoad,
   onProjectNameChange,
   lastSaved,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
 }: {
   projectName: string;
   videoUrl: string | null;
@@ -210,6 +216,10 @@ function LeftPanel({
   onLoad: () => void;
   onProjectNameChange: (name: string) => void;
   lastSaved: number;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
 }) {
   const [resolution, setResolution] = useState<Resolution>("1080p");
   const [showResMenu, setShowResMenu] = useState(false);
@@ -432,9 +442,29 @@ function LeftPanel({
 
         {/* Project */}
         <section className="space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
-            Project
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">
+              Project
+            </p>
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={onUndo}
+                disabled={!canUndo}
+                title="Undo (Ctrl+Z)"
+                className="w-6 h-6 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={onRedo}
+                disabled={!canRedo}
+                title="Redo (Ctrl+Shift+Z)"
+                className="w-6 h-6 rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -516,6 +546,7 @@ function CenterPanel({
   onSubtitleMove,
   onEffectMove,
   onCutDelete,
+  onCheckpoint,
   videoRef,
 }: {
   videoUrl: string | null;
@@ -538,6 +569,7 @@ function CenterPanel({
   onSubtitleMove?: (id: string, s: number, e: number) => void;
   onEffectMove?: (id: string, s: number, e: number) => void;
   onCutDelete?: (index: number) => void;
+  onCheckpoint?: () => void;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   waveformBars?: number[];
   waveformLoading?: boolean;
@@ -694,6 +726,7 @@ function CenterPanel({
         onSubtitleMove={onSubtitleMove}
         onEffectMove={onEffectMove}
         onCutDelete={onCutDelete}
+        onCheckpoint={onCheckpoint}
       />
     </main>
   );
@@ -1209,6 +1242,11 @@ export default function App() {
     setZoom,
     manualSave,
     loadSaved,
+    checkpoint,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
   } = useProject();
 
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -1230,6 +1268,19 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.add("dark");
   }, []);
+
+  // Global Ctrl+Z / Ctrl+Shift+Z keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "z" && !e.shiftKey) { e.preventDefault(); undo(); }
+      if ((e.key === "z" && e.shiftKey) || e.key === "y") { e.preventDefault(); redo(); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undo, redo]);
 
   const handleFileSelect = useCallback(
     (file: File) => {
@@ -1420,6 +1471,7 @@ export default function App() {
         }
 
         // Apply GPT-chosen action and show the reply
+        if (result.cut || result.effect) checkpoint();
         setProject((p) => {
           const next = {
             ...p,
@@ -1453,7 +1505,7 @@ export default function App() {
         setIsSending(false);
       }
     },
-    [currentTime, duration, project, setProject, videoFile]
+    [currentTime, duration, project, setProject, videoFile, checkpoint]
   );
 
   const handleAnalyzeFrame = useCallback(async () => {
@@ -1533,6 +1585,7 @@ export default function App() {
   }, [currentTime, duration, project, setProject, videoFile, videoRef]);
 
   const handleApplySuggestion = useCallback((suggestion: Suggestion) => {
+    checkpoint();
     setProject((p) => {
       const next = { ...p, credits: Math.max(0, p.credits - CREDIT_COST) };
       if (suggestion.cut) {
@@ -1547,7 +1600,7 @@ export default function App() {
       return next;
     });
     setToast(`✓ Applied: ${suggestion.title}`);
-  }, [setProject]);
+  }, [setProject, checkpoint]);
 
   const handleExport = useCallback(async (res: Resolution) => {
     if (!videoFile) return;
@@ -1665,12 +1718,13 @@ export default function App() {
 
   const handleCutDelete = useCallback(
     (index: number) => {
+      checkpoint();
       setProject((p) => ({
         ...p,
         cuts: (p.cuts ?? []).filter((_, i) => i !== index),
       }));
     },
-    [setProject]
+    [setProject, checkpoint]
   );
 
   const handleSave = useCallback(() => {
@@ -1702,6 +1756,10 @@ export default function App() {
         onLoad={handleLoad}
         onProjectNameChange={(name) => updateProject({ name })}
         lastSaved={project.savedAt}
+        onUndo={undo}
+        onRedo={redo}
+        canUndo={canUndo}
+        canRedo={canRedo}
       />
       <CenterPanel
         videoRef={videoRef}
@@ -1723,7 +1781,7 @@ export default function App() {
           if (videoRef.current) videoRef.current.currentTime = t;
         }}
         onTrimChange={setTrim}
-        onEffectDelete={deleteEffect}
+        onEffectDelete={(id) => { checkpoint(); deleteEffect(id); }}
         onEffectUpdate={updateEffect}
         onSubtitleClick={(sub) => {
           if (videoRef.current) videoRef.current.currentTime = sub.start;
@@ -1733,6 +1791,7 @@ export default function App() {
         onSubtitleMove={handleSubtitleMove}
         onEffectMove={handleEffectMove}
         onCutDelete={handleCutDelete}
+        onCheckpoint={checkpoint}
       />
       <RightPanel
         credits={project.credits}
@@ -1746,8 +1805,9 @@ export default function App() {
         onAnalyzeFrame={handleAnalyzeFrame}
         onApplySuggestion={handleApplySuggestion}
         onSubtitleUpdate={updateSubtitle}
-        onSubtitleDelete={deleteSubtitle}
+        onSubtitleDelete={(id) => { checkpoint(); deleteSubtitle(id); }}
         onSubtitleAdd={(sub) => {
+          checkpoint();
           setProject((p) => ({
             ...p,
             subtitles: [...p.subtitles, { ...sub, id: crypto.randomUUID() }],

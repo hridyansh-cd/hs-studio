@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type {
   Project,
   Subtitle,
@@ -7,6 +7,19 @@ import type {
   ChatMessage,
 } from "@/types";
 import { saveProject, loadProject, DEFAULT_PROJECT } from "@/lib/project";
+
+type HistoryEntry = Pick<Project, "cuts" | "effects" | "subtitles" | "trim">;
+
+function getEditable(p: Project): HistoryEntry {
+  return {
+    cuts:      p.cuts ?? [],
+    effects:   p.effects,
+    subtitles: p.subtitles,
+    trim:      p.trim,
+  };
+}
+
+const MAX_HISTORY = 50;
 
 /**
  * Central project state hook — owns all edit history, autosave, and
@@ -19,12 +32,51 @@ export function useProject() {
     return saved ? { ...DEFAULT_PROJECT, ...saved } : DEFAULT_PROJECT;
   });
 
+  // Undo / redo stacks
+  const [past,   setPast]   = useState<HistoryEntry[]>([]);
+  const [future, setFuture] = useState<HistoryEntry[]>([]);
+
+  // Ref so checkpoint() always reads the latest project without being a dep
+  const projectRef = useRef(project);
+  projectRef.current = project;
+
   // Debounced auto-save on every change
   useEffect(() => {
     const t = setTimeout(() => saveProject(project), 1000);
     return () => clearTimeout(t);
   }, [project]);
 
+  // ── History ─────────────────────────────────────────────────────────────
+  /** Call BEFORE applying any undoable edit. */
+  const checkpoint = useCallback(() => {
+    setPast((h) => [...h.slice(-(MAX_HISTORY - 1)), getEditable(projectRef.current)]);
+    setFuture([]);
+  }, []);
+
+  const undo = useCallback(() => {
+    setPast((h) => {
+      if (h.length === 0) return h;
+      const prev = h[h.length - 1];
+      setFuture((f) => [getEditable(projectRef.current), ...f.slice(0, MAX_HISTORY - 1)]);
+      setProject((p) => ({ ...p, ...prev }));
+      return h.slice(0, -1);
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    setFuture((f) => {
+      if (f.length === 0) return f;
+      const next = f[0];
+      setPast((h) => [...h.slice(-(MAX_HISTORY - 1)), getEditable(projectRef.current)]);
+      setProject((p) => ({ ...p, ...next }));
+      return f.slice(1);
+    });
+  }, []);
+
+  const canUndo = past.length > 0;
+  const canRedo = future.length > 0;
+
+  // ── General ─────────────────────────────────────────────────────────────
   const updateProject = useCallback((patch: Partial<Project>) => {
     setProject((p) => ({ ...p, ...patch }));
   }, []);
@@ -129,5 +181,10 @@ export function useProject() {
     setZoom,
     manualSave,
     loadSaved,
+    checkpoint,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
   };
 }
